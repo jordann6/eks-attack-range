@@ -8,16 +8,13 @@ terraform {
     }
   }
 
-  # Reuses the shared state bucket. A dedicated key keeps this lab's state
-  # isolated from the fleet. The bucket is the same one every portfolio root
-  # uses; swap it if you run this in a different account.
-  backend "s3" {
-    bucket       = "tf-state-jordprojs"
-    key          = "eks-attack-range/lab.terraform.tfstate"
-    region       = "us-east-1"
-    use_lockfile = true
-    encrypt      = true
-  }
+  # Local state on purpose. This lab is a throwaway deploy/demo/destroy exercise
+  # that runs in an isolated workload account with no shared state bucket, and is
+  # fully torn down at the end. The state holds only lab resources and a fake
+  # decoy secret value, never a real credential (the trophy key is injected with
+  # kubectl, not Terraform), so there is nothing to protect in a remote backend.
+  # A longer-lived deployment would use an S3 backend in its own account.
+  backend "local" {}
 }
 
 provider "aws" {
