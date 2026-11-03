@@ -24,7 +24,7 @@ deploy: ## Stand up VPC + vulnerable EKS + the app (scopes the endpoint to your 
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "set ANTHROPIC_API_KEY to a THROWAWAY key first"; exit 1; }
 	$(TF) init
 	$(TF) apply -auto-approve \
-		-var='cluster_public_access_cidrs=["'"$$(curl -s ifconfig.me)"'/32"]'
+		-var='cluster_public_access_cidrs=["'"$$(curl -4 -s ifconfig.me)"'/32"]'
 	$$($(TF) output -raw configure_kubectl)
 	$(MAKE) image
 	$(MAKE) app
@@ -61,7 +61,10 @@ demo: ## Run the red-team kill chain end to end
 .PHONY: harden
 harden: ## Apply the blue-team overlay (reverses the five cluster-side weaknesses)
 	kubectl apply -k defend/hardened
+	# apply does not prune, so delete the cluster-admin binding the overlay drops.
+	kubectl delete clusterrolebinding summarizer-cluster-admin --ignore-not-found
 	kubectl -n $(NS) delete secret summarizer-key --ignore-not-found
+	kubectl -n $(NS) rollout restart deployment/summarizer
 	@echo "Now revoke the throwaway key in the Anthropic console and confirm the app 401s."
 
 .PHONY: test
@@ -80,7 +83,7 @@ destroy: ## Tear everything down (removes the LB first so TF can delete the VPC)
 	-kubectl delete -k app/k8s --ignore-not-found
 	-kubectl -n $(NS) delete secret summarizer-key --ignore-not-found
 	$(TF) destroy -auto-approve \
-		-var='cluster_public_access_cidrs=["'"$$(curl -s ifconfig.me)"'/32"]'
+		-var='cluster_public_access_cidrs=["'"$$(curl -4 -s ifconfig.me)"'/32"]'
 
 # --- local gates (platform-guardrails equivalents) --------------------------
 

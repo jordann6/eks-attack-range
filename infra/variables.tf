@@ -37,7 +37,7 @@ variable "cluster_public_access_cidrs" {
     fails loudly rather than exposing the lab. `make deploy` passes your own /32
     automatically:
 
-      terraform apply -var='cluster_public_access_cidrs=["'"$(curl -s ifconfig.me)"'/32"]'
+      terraform apply -var='cluster_public_access_cidrs=["'"$(curl -4 -s ifconfig.me)"'/32"]'
   EOT
   type        = list(string)
   default     = ["192.0.2.1/32"] # TEST-NET-1, non-routable: forces an explicit value

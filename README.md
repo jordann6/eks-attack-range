@@ -75,8 +75,40 @@ Falco see all of it (blue).*
   hardened overlay reuses the vulnerable manifests as its base, so dropping the
   cluster-admin binding meant a `$patch: delete` directive, not just leaving it
   out of the resource list.
-- (Live-run findings, GuardDuty finding IDs and the audit-log screenshots, get
-  appended here after a deploy.)
+- **The account enforced IMDSv2 before I could ship the IMDSv1 weakness.** The
+  first node group apply failed outright: `InvalidRequestException: You can't
+  launch instances with IMDSv1 because httpTokensEnforced is enabled for this
+  account.` That account-level guardrail is a good thing, so instead of weakening
+  it, I made the lab honest: IMDSv2 is required, and the real weakness is the
+  metadata hop limit of 2. The attack then does the IMDSv2 token handshake from
+  inside the pod. The lesson is sharper for it: IMDSv2 does not save you if the
+  hop limit lets a pod reach IMDS at all.
+- **`kubectl --token=""` silently falls back to your kubeconfig admin.** When the
+  hardened pod had no SA token to steal, the kill chain's `kubectl --token=$STOLEN`
+  call ran as my admin context instead of failing, and returned "No resources
+  found" rather than a clean denial. That is a misleading green. The honest proof
+  of the fix is `kubectl auth can-i list secrets --as=system:serviceaccount:summarizer:summarizer`
+  returning `no`, plus showing the token file is absent in the pod.
+- **IPv4 matters for the endpoint allow-list.** `curl ifconfig.me` returned an
+  IPv6 address on this network, and `<ipv6>/32` is not a valid CIDR, so the first
+  apply failed on the EKS endpoint. `curl -4` fixes it. Small thing, lost a
+  cluster-create to it.
+
+## What the live run proved
+
+One full deploy / demo / destroy in an isolated account:
+
+- All five stages landed against live infrastructure: RCE as `uid=0(root)`, node
+  role credentials stolen via the SSRF doing the IMDSv2 handshake, the decoy
+  `prod/db-backup` secret read with those creds, secrets listed cluster-wide with
+  the pod's cluster-admin token, and the Claude API key exfiltrated.
+- The EKS audit log caught the privilege escalation directly:
+  `system:serviceaccount:summarizer:summarizer` doing `list` then `get` on
+  `secrets/summarizer-key`.
+- After the blue-team overlay, the same kill chain could not escalate: the SA
+  token was no longer mounted, `auth can-i list secrets` returned `no`, the
+  cluster-admin binding was gone, and the pod ran as `uid=10001` with no key to
+  steal. Then the throwaway key was revoked and everything torn down.
 
 ## Run it
 

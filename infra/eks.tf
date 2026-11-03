@@ -46,13 +46,17 @@ module "eks" {
       desired_size   = var.node_desired_size
       capacity_type  = "ON_DEMAND"
 
-      # WEAKNESS 2: IMDSv1 is reachable (http_tokens optional) and the hop limit
-      # of 2 lets a pod one hop away from the node reach 169.254.169.254 and read
-      # the node role credentials. This is the SSRF-to-IMDS pivot. The paved road
-      # sets http_tokens = "required" and http_put_response_hop_limit = 1.
+      # WEAKNESS 2: the metadata hop limit is 2, which lets a pod one hop away
+      # from the node reach 169.254.169.254 and read the node role credentials.
+      # IMDSv2 is required (the account enforces httpTokensEnforced, and keeping
+      # it honest, IMDSv2 alone is not the control that matters here), so the
+      # attacker does the IMDSv2 token handshake from inside the pod after the RCE
+      # foothold. This is the lesson: IMDSv2 does not protect you if the hop limit
+      # lets pods reach IMDS at all. The paved road sets hop limit 1, so the pod
+      # is one hop too far and the pivot fails outright.
       metadata_options = {
         http_endpoint               = "enabled"
-        http_tokens                 = "optional"
+        http_tokens                 = "required"
         http_put_response_hop_limit = 2
       }
 

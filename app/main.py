@@ -37,6 +37,12 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 class SummarizeRequest(BaseModel):
     url: str
+    # Caller-controlled method and headers make this a full SSRF proxy. That is
+    # realistic (plenty of "fetch this URL" features let the method or headers
+    # through) and it is what lets the attack complete the IMDSv2 token handshake
+    # against 169.254.169.254, which a GET-only SSRF could not do.
+    method: str = "GET"
+    headers: dict[str, str] = {}
 
 
 @app.get("/healthz")
@@ -49,13 +55,17 @@ def summarize(req: SummarizeRequest):
     """Fetch a URL and 'summarize' it.
 
     WEAKNESS 2 (SSRF): the URL is fetched server-side with no scheme or host
-    allow-list. Point it at http://169.254.169.254/latest/meta-data/iam/
-    security-credentials/ to read the node instance-profile credentials. In a
-    real app this is where the content would go to Claude; here we just return
-    what we fetched so the lab can show the metadata response.
+    allow-list, and the method and headers are caller-controlled. Do the IMDSv2
+    dance: PUT http://169.254.169.254/latest/api/token with the ttl header to get
+    a token, then GET the security-credentials path with that token to read the
+    node instance-profile credentials. In a real app this is where the content
+    would go to Claude; here we return what we fetched so the lab can show it.
     """
     try:
-        with urllib.request.urlopen(req.url, timeout=5) as resp:  # noqa: S310 (intentional)
+        r = urllib.request.Request(req.url, method=req.method)  # noqa: S310 (intentional)
+        for key, value in req.headers.items():
+            r.add_header(key, value)
+        with urllib.request.urlopen(r, timeout=5) as resp:  # noqa: S310 (intentional)
             body = resp.read(4096).decode("utf-8", "replace")
         return {"fetched": req.url, "body": body}
     except Exception as exc:  # noqa: BLE001 (lab)

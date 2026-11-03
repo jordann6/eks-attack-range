@@ -19,7 +19,7 @@ Authorized lab, run end to end in one sitting. Nothing hourly is left running.
 make deploy
 ```
 
-This runs `terraform apply` scoped to your current public IP (`curl ifconfig.me`
+This runs `terraform apply` scoped to your current public IP (`curl -4 ifconfig.me`
 /32, never 0.0.0.0/0), points kubectl at the cluster, builds and pushes the
 summarizer image to ECR, deploys the manifests, and creates the trophy Secret
 from your throwaway key. Wait for the LoadBalancer:

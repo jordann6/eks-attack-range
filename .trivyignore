@@ -19,11 +19,13 @@ AVD-AWS-0041
 # the sibling aws-developer-platform repo documents at length.
 AVD-AWS-0104
 
-# AVD-AWS-0130 "aws_instance should activate session tokens for IMDS."
-# This IS weakness 2: the node group launch template sets http_tokens optional
-# (IMDSv1 reachable) at hop limit 2, which is the SSRF-to-IMDS pivot. The
-# blue-team overlay / paved road sets required + hop limit 1.
-AVD-AWS-0130
+# IMDS, weakness 2: the node group requires IMDSv2 (http_tokens = required,
+# because the account enforces httpTokensEnforced) but keeps the metadata hop
+# limit at 2, which is what actually lets a pod reach IMDS. IMDSv2 alone is not
+# the control that matters; the hop limit is. The paved road sets hop limit 1, so
+# the pod is one hop too far and the pivot fails. No AVD id is suppressed for this
+# because http_tokens = required already satisfies Trivy's IMDS check; the
+# remaining risk is the hop limit, which Trivy does not flag on its own.
 
 # AVD-AWS-0031 "ECR images tags shouldn't be mutable."
 # Intentional: the lab rebuilds and repushes the :lab tag on every iteration, so
