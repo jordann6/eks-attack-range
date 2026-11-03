@@ -5,7 +5,7 @@
 #
 #   WEAKNESS                         HARDENED COUNTERPART (paved road)
 #   public endpoint (scoped to /32)  private endpoint over SSM port-forward
-#   IMDSv1 reachable, hop limit 2    IMDSv2 required, hop limit 1
+#   IMDS reachable, hop limit 2      hop limit 1 (IMDSv2 required in both)
 #   broad node IAM role              minimal node role + IRSA per workload
 #   no etcd KMS encryption           encryption_config over the secrets resource
 #   (no admission control)           PodSecurity restricted + Kyverno enforce

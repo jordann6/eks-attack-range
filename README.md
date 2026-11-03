@@ -16,7 +16,7 @@ throwaway revoked at the end, and the whole thing is deploy, demo, destroy.
 
 Most Kubernetes security advice is a list of settings with no attacker attached,
 so it is hard to feel why any single one matters. The individually-small
-defaults, IMDSv1 left on, a ServiceAccount token auto-mounted, a slightly-too-broad
+defaults, IMDS reachable from pods, a ServiceAccount token auto-mounted, a slightly-too-broad
 node role, a secret in an environment variable, are each easy to wave away. The
 point of this lab is to chain them: show that those five "minor" choices compose
 into a path from one unauthenticated HTTP request to cluster-admin and a stolen
@@ -32,8 +32,9 @@ the app gives RCE in the pod (1). From the pod, SSRF reaches the EC2 node's
 instance metadata service and steals its IAM role credentials (2), which read
 Secrets Manager account-wide (3). The pod's auto-mounted ServiceAccount token is
 bound to cluster-admin, so it drives the API server directly (4) and reads the
-plaintext Claude API key out of etcd (5). Control-plane audit logs, GuardDuty and
-Falco see all of it (blue).*
+plaintext Claude API key out of etcd (5). The control-plane audit log catches the
+privilege escalation directly; GuardDuty and Falco are armed for the runtime side
+(blue).*
 
 ## Decisions
 
@@ -55,7 +56,7 @@ Falco see all of it (blue).*
 | # | Weakness (this lab) | Kill-chain use | Fix (paved road) |
 |---|---------------------|----------------|------------------|
 | 1 | Command injection in the app | RCE foothold | Input validation, no shell-out |
-| 2 | IMDSv1 reachable, node hop limit 2 | Steal node role creds via SSRF | IMDSv2 required, hop limit 1 |
+| 2 | IMDS reachable from pods (node hop limit 2) | Steal node role creds via SSRF + IMDSv2 handshake | hop limit 1, NetworkPolicy egress deny to IMDS |
 | 3 | Broad node IAM role | Read Secrets Manager account-wide | Minimal node role, scoped IRSA |
 | 4 | cluster-admin SA + token automount | Drive the API as cluster-admin | Least-privilege RBAC, automount off |
 | 5 | API key in a plaintext env Secret | The trophy | External Secrets, or keyless Bedrock |

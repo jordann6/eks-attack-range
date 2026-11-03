@@ -17,7 +17,8 @@ an abstract recommendation.
 
 Build the vulnerable cluster by taking the `aws-developer-platform` EKS base
 (community module, already a public endpoint) and inverting each hardening
-control from the paved road: IMDSv1 + hop limit 2, a broad node IAM role, a
+control from the paved road: IMDS reachable at hop limit 2 (IMDSv2 required, since
+the account enforces it), a broad node IAM role, a
 cluster-admin ServiceAccount binding, no etcd encryption, no admission control.
 Each weakness carries a comment naming its hardened counterpart, and the
 `defend/` overlay restores it.

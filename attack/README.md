@@ -15,7 +15,7 @@ overlay removes each one and the chain then fails at that stage.
 |------|-----------|-------------------|------------------|---------------------|
 | 0 Recon | Nmap, Dirsearch, WhatWeb | Pull `/healthz` and the OpenAPI schema to map routes | Debug schema exposed | T1595 Active Scanning |
 | 1 Foothold | Exploit to reverse shell | Command injection in `/tools/diagnose` for RCE in the pod | Unsanitised shell call | T1190 Exploit Public-Facing App |
-| 2 IMDS creds | Burp intercept/modify | SSRF in `/summarize` reaches `169.254.169.254`, steals node role creds | IMDSv1 + hop limit 2 | T1552.005 Cloud Instance Metadata API |
+| 2 IMDS creds | Burp intercept/modify | SSRF in `/summarize` does the IMDSv2 handshake to `169.254.169.254`, steals node role creds | IMDS reachable at hop limit 2 | T1552.005 Cloud Instance Metadata API |
 | 3 Lateral move | Pivot to other hosts | Stolen node creds read Secrets Manager account-wide | Broad node IAM role | T1078.004 Valid Cloud Accounts |
 | 4 Privesc | Escalate to root | Auto-mounted SA token drives the API as cluster-admin | cluster-admin binding + automount | T1134 Access Token Manipulation |
 | 5 Trophy | Capture the flag | `get secret` the plaintext Claude API key | Secret in env, no etcd encryption | T1552.001 Credentials In Files |

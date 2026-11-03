@@ -9,14 +9,19 @@ remediations and re-run the chain to prove each stage now **fails**.
 | Kill-chain stage | Where it shows up | Signal |
 |------------------|-------------------|--------|
 | 1 Foothold (RCE) | Falco (`detections/falco-rules.yaml`) | shell spawned in the summarizer container |
-| 2 IMDS creds | Falco + VPC flow logs | outbound to 169.254.169.254 from a pod |
-| 2/3 Stolen creds used | CloudTrail / GuardDuty | `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS` |
+| 2 IMDS creds | Falco | pod process opens a connection to 169.254.169.254 |
+| 2/3 Stolen creds used | CloudTrail / GuardDuty | expected `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS` |
 | 4 Privesc | EKS audit log (`detections/eks-audit-insights.md`) | SA `summarizer` doing `list secrets` cluster-wide |
 | 5 Trophy | EKS audit log | `get secret summarizer-key` by the pod identity |
 
-GuardDuty EKS Protection and Runtime Monitoring catch 1, 2 and 4 without the
-custom Falco rules; Falco is here to show the runtime signal directly and to
-feed the existing `aws-incident-responder` Claude-summary hook.
+Note: traffic to the IMDS endpoint (169.254.169.254) is link-local and does not
+appear in VPC Flow Logs, so stage 2 is caught at the host with Falco (the pod
+process reaching IMDS), not in flow logs. The stage 4 and 5 rows are confirmed
+from the live run; the GuardDuty row is the finding to expect, and should be
+treated as unverified until actually observed (findings lag by minutes to an
+hour). GuardDuty EKS Protection and Runtime Monitoring are positioned to catch
+stages 1, 2 and 4 without the custom Falco rules; Falco shows the runtime signal
+directly and feeds the existing `aws-incident-responder` Claude-summary hook.
 
 ## Remediate
 
@@ -33,7 +38,7 @@ built by inverting. The mapping:
 | runs as root, no limits | `hardened/` adds a `restricted` securityContext |
 | namespace privileged | `hardened/` sets `pod-security.kubernetes.io/enforce: restricted` |
 | key in a plaintext env Secret | move to External Secrets + Secrets Manager, or keyless Bedrock (`aws-golden-path-copilot/copilot/bedrock_client.py`) |
-| IMDSv1, broad node role, public endpoint, no etcd encryption | revert to `aws-landing-zone/workload/eks.tf` settings |
+| IMDS hop limit 2, broad node role, public endpoint, no etcd encryption | revert to `aws-landing-zone/workload/eks.tf` settings (hop limit 1, minimal node role, private endpoint, KMS etcd) |
 
 Apply the overlay:
 
