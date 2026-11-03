@@ -30,7 +30,7 @@ with Diagram(
     guard = Guardduty("GuardDuty + Falco\naudit log")
 
     with Cluster("VPC (lab)"):
-        node = EC2("managed node (EC2)\nIMDSv1, broad role")
+        node = EC2("managed node (EC2)\nIMDSv2, hop limit 2, broad role")
         with Cluster("namespace: summarizer"):
             pod = Pod("summarizer pod\n(cluster-admin SA)")
             trophy = Secret("Secret: ANTHROPIC_API_KEY\n(plaintext in etcd)")
@@ -38,7 +38,7 @@ with Diagram(
 
     attacker >> red << nlb
     nlb >> Edge(label="1. RCE via cmd injection", **red.attrs) >> pod
-    pod >> Edge(label="2. SSRF to IMDS", **red.attrs) >> node
+    pod >> Edge(label="2. SSRF + IMDSv2 handshake", **red.attrs) >> node
     node >> Edge(label="3. stolen node creds", **red.attrs) >> loot
     pod >> Edge(label="4. SA token -> cluster-admin", **red.attrs) >> eks
     eks >> Edge(label="5. get secret (trophy)", **red.attrs) >> trophy
