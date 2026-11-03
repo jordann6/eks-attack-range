@@ -1,0 +1,51 @@
+name: Guardrails
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Credential-free by design. Everything below runs static analysis over
+# Terraform that, on a pull_request event, was authored by whoever opened the
+# PR. Nothing here should ever hold a permission that can mint a cloud token.
+#
+# The credentialed gates (plan, destroy guard, cost diff) live in tf-plan.yml
+# and are deliberately not wired up here, because they need an OIDC role ARN
+# that this installer has no way to know. See "The credentialed half" in the
+# platform-guardrails README for the block to paste in once you have a role.
+permissions:
+  contents: read
+
+jobs:
+  static:
+    uses: jordann6/platform-guardrails/.github/workflows/tf-ci.yml@6b716834c69634d4fcd050f440ea5f2c7b52c397 # v1.9.0
+    with:
+      terraform_dir: infra
+      guardrails_ref: 6b716834c69634d4fcd050f440ea5f2c7b52c397
+      # This lab is vulnerable by design: the baseline and infra/.trivyignore
+      # accept the planted findings so CI stays green on the lab as shipped.
+      # The blue-team overlay in defend/ removes the misconfigurations rather
+      # than suppressing them. See the README before adding anything here.
+      checkov_baseline: infra/.checkov.baseline
+
+  # The FinOps allocation policy (finops.rego) already runs inside `static`
+  # above, because tf-ci.yml evaluates the whole shared policy/ directory. So
+  # the CostCenter tag gate needs no wiring: it is on the moment this file is.
+  #
+  # The one FinOps piece that is NOT credential-free is the cost *threshold*.
+  # It needs the INFRACOST_API_KEY secret (free tier is fine), so it stays
+  # commented until that secret exists on the repo, matching the plan gate.
+  # Uncomment once it does:
+  #
+  # finops:
+  #   uses: jordann6/platform-guardrails/.github/workflows/finops-gate.yml@6b716834c69634d4fcd050f440ea5f2c7b52c397 # v1.9.0
+  #   permissions:
+  #     contents: read
+  #     pull-requests: write
+  #   with:
+  #     terraform_dir: infra
+  #     max_monthly_increase: "50"   # USD/month a PR may add before it fails
+  #     fail_on_cost: true           # false = comment only
+  #     guardrails_ref: 6b716834c69634d4fcd050f440ea5f2c7b52c397
+  #   secrets:
+  #     INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}

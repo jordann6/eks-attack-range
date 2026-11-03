@@ -1,0 +1,50 @@
+{
+    "failed_checks": [
+        {
+            "file": "/ecr.tf",
+            "findings": [
+                {
+                    "resource": "aws_ecr_repository.app",
+                    "check_ids": [
+                        "CKV_AWS_136",
+                        "CKV_AWS_51"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/eks.tf",
+            "findings": [
+                {
+                    "resource": "eks",
+                    "check_ids": [
+                        "CKV_TF_1"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/node-iam.tf",
+            "findings": [
+                {
+                    "resource": "aws_secretsmanager_secret.loot",
+                    "check_ids": [
+                        "CKV2_AWS_57",
+                        "CKV_AWS_149"
+                    ]
+                }
+            ]
+        },
+        {
+            "file": "/vpc.tf",
+            "findings": [
+                {
+                    "resource": "vpc",
+                    "check_ids": [
+                        "CKV_TF_1"
+                    ]
+                }
+            ]
+        }
+    ]
+}

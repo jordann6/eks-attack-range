@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: summarizer
+  namespace: summarizer
+  labels:
+    app: summarizer
+spec:
+  # A public LoadBalancer is how the attack box reaches the app, the way the
+  # video's target VM exposed a web server. The hardened overlay makes this
+  # ClusterIP behind an ingress with a WAF, not an internet-facing NLB.
+  type: LoadBalancer
+  selector:
+    app: summarizer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

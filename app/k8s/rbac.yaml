@@ -1,0 +1,23 @@
+# WEAKNESS 5: the app's ServiceAccount is bound to the built-in cluster-admin
+# ClusterRole. A web app needs no Kubernetes API access at all, let alone all of
+# it. Once the foothold reads the mounted SA token, this binding is what makes it
+# cluster-admin: list Secrets in every namespace, read the trophy key, enumerate
+# the whole cluster. This is the privilege-escalation-to-root beat.
+#
+# The hardened overlay deletes this binding entirely. The app gets no API rights;
+# the one workload that must read a secret (External Secrets Operator) gets a
+# narrow IRSA role scoped to a single Secrets Manager entry.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: summarizer-cluster-admin
+  labels:
+    app.kubernetes.io/part-of: eks-attack-range
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: summarizer
+    namespace: summarizer

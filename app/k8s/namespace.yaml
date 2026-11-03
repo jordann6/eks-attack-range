@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: summarizer
+  labels:
+    app.kubernetes.io/part-of: eks-attack-range
+    # No pod-security labels on purpose: the namespace runs under the default
+    # (privileged) PodSecurity level. The hardened overlay sets
+    # pod-security.kubernetes.io/enforce: restricted here.

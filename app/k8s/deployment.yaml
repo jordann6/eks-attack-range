@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: summarizer
+  namespace: summarizer
+  labels:
+    app: summarizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: summarizer
+  template:
+    metadata:
+      labels:
+        app: summarizer
+    spec:
+      serviceAccountName: summarizer
+      containers:
+        - name: summarizer
+          # Replaced with the ECR image by `make deploy` (kustomize edit set image).
+          image: summarizer:lab
+          ports:
+            - containerPort: 8000
+          env:
+            # WEAKNESS 1: the trophy key is injected from a plaintext Secret as a
+            # plain environment variable. Visible in `kubectl get pod -o yaml`,
+            # in the Secret, and to anything with RCE in the container.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: summarizer-key
+                  key: ANTHROPIC_API_KEY
+          # No securityContext on purpose: runs as root, privilege escalation
+          # allowed, root filesystem writable. The hardened overlay drops all
+          # capabilities, runs non-root, and sets readOnlyRootFilesystem: true.

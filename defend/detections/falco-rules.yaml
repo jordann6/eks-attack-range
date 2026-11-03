@@ -1,0 +1,53 @@
+# Custom Falco rules for the lab. Install Falco (helm) with these appended to
+# the rules file. They catch the runtime side of stages 1 and 2 directly, and
+# feed the existing aws-incident-responder Claude-summary hook.
+#
+#   helm install falco falcosecurity/falco \
+#     --namespace falco --create-namespace \
+#     --set-file customRules.attack-range\.yaml=defend/detections/falco-rules.yaml
+
+- rule: Shell spawned in summarizer pod
+  desc: >
+    The summarizer is a web app and never legitimately runs a shell. A shell
+    under its container is the command-injection foothold (kill-chain stage 1).
+  condition: >
+    spawned_process
+    and container
+    and k8s.ns.name = "summarizer"
+    and proc.name in (shell_binaries)
+  output: >
+    Shell in summarizer pod (user=%user.name proc=%proc.cmdline
+    container=%container.name image=%container.image.repository)
+  priority: WARNING
+  tags: [container, attack_range, T1190]
+
+- rule: Pod reached instance metadata service
+  desc: >
+    A pod connecting to 169.254.169.254 is the SSRF-to-IMDS credential theft
+    (kill-chain stage 2). No workload here should talk to IMDS; the paved road
+    uses IRSA instead.
+  condition: >
+    outbound
+    and container
+    and fd.sip = "169.254.169.254"
+  output: >
+    Pod contacted IMDS (command=%proc.cmdline connection=%fd.name
+    container=%container.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [container, attack_range, T1552.005]
+
+- rule: ServiceAccount token read inside summarizer pod
+  desc: >
+    Reading the mounted SA token is the setup for cluster-admin privilege
+    escalation (kill-chain stage 4).
+  condition: >
+    open_read
+    and container
+    and k8s.ns.name = "summarizer"
+    and fd.name contains "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    and not proc.name in (pause, kubelet)
+  output: >
+    SA token read in summarizer pod (proc=%proc.cmdline file=%fd.name
+    container=%container.name)
+  priority: WARNING
+  tags: [container, attack_range, T1134]

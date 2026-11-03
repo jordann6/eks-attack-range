@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The Secret is intentionally NOT listed here so no API key is ever committed.
+# `make deploy` creates it imperatively from a throwaway key:
+#   kubectl -n summarizer create secret generic summarizer-key \
+#     --from-literal=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml

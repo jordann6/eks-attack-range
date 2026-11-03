@@ -1,0 +1,61 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Hardened overlay over the vulnerable app manifests. Reverses the five
+# cluster-side weaknesses. Apply with: kubectl apply -k defend/hardened/
+resources:
+  - ../../app/k8s
+
+patches:
+  # Fix 1: delete the cluster-admin binding entirely. The app needs no API access.
+  - target:
+      kind: ClusterRoleBinding
+      name: summarizer-cluster-admin
+    patch: |
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: summarizer-cluster-admin
+
+  # Fix 2: stop auto-mounting the ServiceAccount token.
+  - target:
+      kind: ServiceAccount
+      name: summarizer
+    patch: |
+      - op: replace
+        path: /automountServiceAccountToken
+        value: false
+
+  # Fix 3: enforce the restricted PodSecurity standard on the namespace.
+  - target:
+      kind: Namespace
+      name: summarizer
+    patch: |
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: restricted
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1warn
+        value: restricted
+
+  # Fix 4: run the pod non-root with a locked-down securityContext so it is
+  # admissible under restricted, and a shell cannot escalate.
+  - target:
+      kind: Deployment
+      name: summarizer
+    patch: |
+      - op: add
+        path: /spec/template/spec/securityContext
+        value:
+          runAsNonRoot: true
+          runAsUser: 10001
+          seccompProfile:
+            type: RuntimeDefault
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]

@@ -1,0 +1,32 @@
+# This is a DELIBERATELY-VULNERABLE lab. The findings below are the lab, not
+# accidents. Each is load-bearing for one step of the kill chain and has a
+# hardened counterpart in aws-landing-zone/workload/eks.tf. They are suppressed
+# so the shared Trivy gate (CRITICAL,HIGH) stays green on the lab as shipped; the
+# blue-team overlay in defend/ removes the underlying misconfiguration rather
+# than suppressing the finding. IDs verified against `trivy config infra`.
+
+# AVD-AWS-0040 "EKS Clusters should have the public access disabled."
+# AVD-AWS-0041 "EKS cluster should not have open CIDR range for public access."
+# Intentional: eks.tf exposes a public endpoint so the attack box can drive the
+# API. Scoped to a single /32 (0.0.0.0/0 is refused in variables.tf). A /32 still
+# fires AVD-AWS-0041, so only a private endpoint clears it, which is the fix.
+AVD-AWS-0040
+AVD-AWS-0041
+
+# AVD-AWS-0104 "Security group rule should not allow unrestricted egress."
+# Upstream default inside terraform-aws-modules/eks (node_groups.tf egress_all),
+# reached because a config scan downloads remote modules. Same accepted exception
+# the sibling aws-developer-platform repo documents at length.
+AVD-AWS-0104
+
+# AVD-AWS-0130 "aws_instance should activate session tokens for IMDS."
+# This IS weakness 2: the node group launch template sets http_tokens optional
+# (IMDSv1 reachable) at hop limit 2, which is the SSRF-to-IMDS pivot. The
+# blue-team overlay / paved road sets required + hop limit 1.
+AVD-AWS-0130
+
+# AVD-AWS-0031 "ECR images tags shouldn't be mutable."
+# Intentional: the lab rebuilds and repushes the :lab tag on every iteration, so
+# the repo must be MUTABLE. Not part of an attack path, just a throwaway-lab
+# ergonomics choice; a production registry would be IMMUTABLE with digests.
+AVD-AWS-0031
