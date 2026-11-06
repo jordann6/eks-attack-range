@@ -1,0 +1,65 @@
+# The in-cluster lab receiver: the canary-trophy oracle and the hardened app's
+# one fixed upstream. It is NOT a vulnerable component. It runs non-root under
+# the restricted securityContext in both the baseline and hardened runs; only
+# the summarizer is deliberately weak. It reads the same synthetic canary token
+# the summarizer mounts, so it can tell a stolen trophy token from any other.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: receiver
+  namespace: summarizer
+  labels:
+    app: receiver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: receiver
+  template:
+    metadata:
+      labels:
+        app: receiver
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: receiver
+          # Replaced with the ECR image by `make app` (kustomize set image).
+          image: receiver:lab
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: CANARY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: summarizer-key
+                  key: CANARY_TOKEN
+                  # Optional so the receiver still starts in the hardened run,
+                  # where the Secret is deleted. Its /fetch upstream role needs
+                  # no token; only the baseline trophy oracle does.
+                  optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: receiver
+  namespace: summarizer
+  labels:
+    app: receiver
+spec:
+  type: ClusterIP
+  selector:
+    app: receiver
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

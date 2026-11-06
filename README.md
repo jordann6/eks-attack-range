@@ -43,7 +43,8 @@ privilege escalation directly; GuardDuty and Falco are armed for the runtime sid
   one-line diff, not an abstract tip. See [ADR-0001](docs/adr/0001-invert-the-paved-road.md).
 - **Safety is enforced in code, not just documented.** `variables.tf` refuses
   `0.0.0.0/0` on the control-plane endpoint, `make deploy` injects your own /32,
-  the trophy key is created imperatively so it never lands in git, and the
+  the trophy is a synthetic per-run canary token created imperatively so it
+  never lands in git, accepted only by the in-cluster lab receiver, and the
   Secrets Manager decoy is an obviously fake value. See [ADR-0002](docs/adr/0002-throwaway-key-as-trophy.md).
 - **Audit logging stays on in the vulnerable build.** The blue-team half depends
   on the attack being visible, so the misconfiguration is never "no logging."
@@ -97,6 +98,11 @@ privilege escalation directly; GuardDuty and Falco are armed for the runtime sid
 
 ## What the live run proved
 
+> Note: the suite was restructured (code-level hardened image, a synthetic
+> canary trophy, and a per-stage demo that judges each control independently).
+> The results below are from the earlier live run; a fresh run against the new
+> suite is pending and will replace this section.
+
 One full deploy / demo / destroy in an isolated account:
 
 - All five stages landed against live infrastructure: RCE as `uid=0(root)`, node
@@ -118,13 +124,17 @@ Authorized use only, against infrastructure you own. Full steps in
 
 ```bash
 export AWS_PROFILE=<sandbox>
-export ANTHROPIC_API_KEY=sk-ant-...   # a THROWAWAY key, revoked at the end
-make deploy      # VPC + vulnerable EKS + the app, endpoint scoped to your IP
-make demo        # run the kill chain end to end
-make harden      # apply the blue-team overlay, delete the trophy Secret
-make test        # assert the controls now deny
-make destroy     # tear everything down (verify nothing hourly survives)
+make deploy          # VPC + vulnerable EKS + app + receiver, endpoint scoped to your IP
+make demo            # judge every stage on the baseline (expect all exploited)
+make harden          # hardened image + overlay, delete the trophy Secret, then verify
+make verify-hardened # prove all five controls hold (run again or part of harden)
+make destroy         # tear everything down (verify nothing hourly survives)
 ```
+
+No vendor API key is needed. The trophy is a synthetic canary token minted per
+run and accepted only by the in-cluster lab receiver, so there is nothing real
+to revoke. `make test` runs the Python unit tests; `make check` adds the Terraform
+and manifest gates.
 
 ## Repository layout
 

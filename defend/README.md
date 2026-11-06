@@ -40,16 +40,20 @@ built by inverting. The mapping:
 | key in a plaintext env Secret | move to External Secrets + Secrets Manager, or keyless Bedrock (`aws-golden-path-copilot/copilot/bedrock_client.py`) |
 | IMDS hop limit 2, broad node role, public endpoint, no etcd encryption | revert to `aws-landing-zone/workload/eks.tf` settings (hop limit 1, minimal node role, private endpoint, KMS etcd) |
 
-Apply the overlay:
+Apply the hardening (one authoritative procedure):
 
 ```bash
-kubectl apply -k hardened/
+make harden            # hardened image + overlay, delete the Secret, then verify
+make verify-hardened   # prove all five controls hold
 ```
 
-Then revoke the throwaway key in the Anthropic console and confirm the app 401s.
-Re-run `../attack/killchain.sh`: stage 1 can no longer spawn a shell under the
-restricted context, stage 2 cannot reach IMDS, and stages 4 and 5 get `Forbidden`
-because the token is gone and the binding is removed.
+`make harden` swaps the summarizer to the hardened image (which removes the
+command-injection and SSRF weaknesses in code), applies the overlay, and deletes
+the cluster-admin binding and the trophy Secret. There is no vendor key and no
+console step: the trophy is a synthetic canary, and deleting the Secret leaves
+nothing to exfiltrate. Re-run `python3 ../attack/demo.py`: stage 1 is rejected
+with a 400, stage 2 can only reach the fixed upstream, and stages 4 and 5 are
+denied because the token is gone and the binding is removed.
 
 ## Why the trophy hurt: the key never expired
 
