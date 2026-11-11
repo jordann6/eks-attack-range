@@ -1,0 +1,20 @@
+# AKS BYO CNI for the attack range (ADR-0004 decision 2). Unlike the netseg
+# AKS port, this lab needs no L7/DNS proxy, no Hubble capture pipeline, and no
+# version pin for evidence comparability: it needs one thing, an egress deny
+# to the metadata endpoint. Kept minimal on purpose; do not copy netseg's full
+# values-common.yaml wholesale here, that lab's extra settings (REFUSED dns
+# rcode, Hubble ring buffer) serve a runner this lab does not have.
+aksbyocni:
+  enabled: true
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4PodCIDRList: ["10.244.0.0/16"]
+    clusterPoolIPv4MaskSize: 24
+routingMode: tunnel
+tunnelProtocol: vxlan
+kubeProxyReplacement: "false"
+enableIPv4Masquerade: true
+# Undo the NoExecute taint the nodes carry so nothing schedules before Cilium
+# is managing the node.
+agentNotReadyTaintKey: node.cilium.io/agent-not-ready

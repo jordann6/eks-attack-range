@@ -21,3 +21,4 @@ infracost.json
 # python
 __pycache__/
 *.pyc
+app/k8s-aks/
