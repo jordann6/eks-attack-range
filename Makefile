@@ -1,8 +1,8 @@
 # EKS Attack Range — deploy / demo / harden / destroy.
 #
 # Nothing here is left running: every target that creates hourly resources has a
-# destroy path, and `make destroy` is verified against platform-guardrails'
-# hourly-guard. Run the whole red + blue exercise in one sitting, then destroy.
+# destroy path, and `make destroy-plan` + `make verify-gone` confirm it.
+# Run the whole red + blue exercise in one sitting, then destroy.
 #
 # Prereqs: terraform, aws, kubectl, docker, jq, python3. No vendor API key is
 # needed: the trophy is a SYNTHETIC canary token minted per run and accepted
@@ -20,12 +20,18 @@ help: ## List targets
 
 # --- infrastructure ---------------------------------------------------------
 
-.PHONY: deploy
-deploy: ## Stand up VPC + vulnerable EKS + the app (scopes the endpoint to your IP)
-	$(TF) init
-	$(TF) apply -auto-approve \
+.PHONY: plan
+plan: ## Write infra/tfplan (endpoint scoped to your IPv4 /32) and print the apply command
+	$(TF) init -input=false
+	$(TF) plan -input=false -out=tfplan \
 		-var='cluster_public_access_cidrs=["'"$$(curl -4 -s ifconfig.me)"'/32"]'
+	@echo; echo "Read the plan, then run:  terraform -chdir=$(CURDIR)/infra apply $(CURDIR)/infra/tfplan"
+	@echo "Then:  make deploy"
+
+.PHONY: deploy
+deploy: ## After applying the saved plan: point kubectl at the cluster, push images, deploy the app
 	$$($(TF) output -raw configure_kubectl)
+	@echo "kubectl context: $$(kubectl config current-context)"
 	$(MAKE) image
 	$(MAKE) app
 
@@ -102,12 +108,24 @@ verify-hardened: ## Prove all five controls hold after `make harden`
 
 # --- teardown ---------------------------------------------------------------
 
-.PHONY: destroy
-destroy: ## Tear everything down (removes the LB first so TF can delete the VPC)
-	-kubectl delete -k app/k8s --ignore-not-found
+.PHONY: destroy-plan
+destroy-plan: ## Remove the app first (frees the NLB), then write infra/destroy.tfplan and print the destroy command
+	-kubectl delete -k app/k8s --ignore-not-found --wait=true
 	-kubectl -n $(NS) delete secret summarizer-key --ignore-not-found
-	$(TF) destroy -auto-approve \
+	$(TF) plan -destroy -input=false -out=destroy.tfplan \
 		-var='cluster_public_access_cidrs=["'"$$(curl -4 -s ifconfig.me)"'/32"]'
+	@echo; echo "Read the plan, then run:  terraform -chdir=$(CURDIR)/infra apply $(CURDIR)/infra/destroy.tfplan"
+	@echo "Then:  make verify-gone"
+
+.PHONY: verify-gone
+verify-gone: ## Confirm nothing hourly survived: no cluster, NAT gateway, load balancer or ECR repo
+	@# Not read from terraform output: after a destroy the state has no outputs.
+	@r=$${AWS_REGION:-us-east-1}; \
+	echo "clusters:   $$(aws eks list-clusters --region $$r --query 'clusters[?@==`attack-range`]' --output text)"; \
+	echo "nat gws:    $$(aws ec2 describe-nat-gateways --region $$r --filter Name=tag:Project,Values=eks-attack-range Name=state,Values=available,pending --query 'NatGateways[].NatGatewayId' --output text)"; \
+	echo "load bal:   $$(aws elbv2 describe-load-balancers --region $$r --query 'LoadBalancers[?contains(LoadBalancerName, `k8s`)].LoadBalancerArn' --output text 2>/dev/null) $$(aws elb describe-load-balancers --region $$r --query 'LoadBalancerDescriptions[].LoadBalancerName' --output text)"; \
+	echo "ecr:        $$(aws ecr describe-repositories --region $$r --query 'repositories[?contains(repositoryName, `attack-range`)].repositoryName' --output text 2>/dev/null)"; \
+	echo "(all four empty = nothing left running)"
 
 # --- local gates (platform-guardrails equivalents) --------------------------
 

@@ -42,7 +42,7 @@ privilege escalation directly; GuardDuty and Falco are armed for the runtime sid
   an inversion of a control in my paved-road cluster, so each fix is a concrete
   one-line diff, not an abstract tip. See [ADR-0001](docs/adr/0001-invert-the-paved-road.md).
 - **Safety is enforced in code, not just documented.** `variables.tf` refuses
-  `0.0.0.0/0` on the control-plane endpoint, `make deploy` injects your own /32,
+  `0.0.0.0/0` on the control-plane endpoint, `make plan` injects your own /32,
   the trophy is a synthetic per-run canary token created imperatively so it
   never lands in git, accepted only by the in-cluster lab receiver, and the
   Secrets Manager decoy is an obviously fake value. See [ADR-0002](docs/adr/0002-throwaway-key-as-trophy.md).
@@ -124,11 +124,12 @@ Authorized use only, against infrastructure you own. Full steps in
 
 ```bash
 export AWS_PROFILE=<sandbox>
-make deploy          # VPC + vulnerable EKS + app + receiver, endpoint scoped to your IP
+make plan            # saved plan, endpoint scoped to your IP; read it, apply infra/tfplan
+make deploy          # after the apply: images + app + receiver
 make demo            # judge every stage on the baseline (expect all exploited)
 make harden          # hardened image + overlay, delete the trophy Secret, then verify
 make verify-hardened # prove all five controls hold (run again or part of harden)
-make destroy         # tear everything down (verify nothing hourly survives)
+make destroy-plan    # remove the app, write destroy.tfplan; apply it, then make verify-gone
 ```
 
 No vendor API key is needed. The trophy is a synthetic canary token minted per

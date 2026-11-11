@@ -5,6 +5,7 @@
 *.tfvars
 !example.tfvars
 tfplan
+destroy.tfplan
 plan.json
 .terraform/
 crash.log

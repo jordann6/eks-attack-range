@@ -16,11 +16,14 @@ Authorized lab, run end to end in one sitting. Nothing hourly is left running.
 ## 1. Deploy
 
 ```bash
+make plan        # writes infra/tfplan, endpoint scoped to your IPv4 /32, never 0.0.0.0/0
+# read the plan, then apply it yourself:
+terraform -chdir=infra apply tfplan
 make deploy
 ```
 
-This runs `terraform apply` scoped to your current public IP (`curl -4 ifconfig.me`
-/32, never 0.0.0.0/0), points kubectl at the cluster, builds and pushes the
+`make plan` scopes the endpoint to your current public IP (`curl -4 ifconfig.me`).
+After the saved plan is applied, `make deploy` points kubectl at the cluster, builds and pushes the
 summarizer, receiver and hardened images to ECR, deploys the manifests, and
 mints the synthetic canary trophy Secret. Wait for the LoadBalancer:
 
@@ -82,14 +85,9 @@ control), which is deliberately not shown as `blocked`.
 ## 6. Destroy
 
 ```bash
-make destroy
-```
-
-Removes the app (so the NLB is deleted before the VPC) and runs
-`terraform destroy`. Confirm nothing hourly survived:
-
-```bash
-~/platform-guardrails/scripts/hourly-guard.sh   # or the tf-destroy CI check
+make destroy-plan   # removes the app (NLB goes before the VPC), writes infra/destroy.tfplan
+terraform -chdir=infra apply destroy.tfplan
+make verify-gone    # cluster, NAT gateway, load balancers and ECR repo must all be empty
 ```
 
 EKS control plane, EC2 nodes, NAT gateway and the NLB are all hourly. If any
