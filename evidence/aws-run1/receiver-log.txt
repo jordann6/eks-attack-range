@@ -1,0 +1,9 @@
+Found 2 pods, using pod/receiver-9f5495f5b-dcw9m
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     10.0.2.148:37778 - "POST /fetch HTTP/1.1" 200 OK
+INFO:     10.0.2.148:37792 - "POST /fetch HTTP/1.1" 200 OK
+INFO:     10.0.2.148:36922 - "POST /fetch HTTP/1.1" 200 OK
+INFO:     10.0.2.148:44918 - "POST /fetch HTTP/1.1" 200 OK

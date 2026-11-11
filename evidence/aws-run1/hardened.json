@@ -1,0 +1,26 @@
+{
+  "0": {
+    "status": "info",
+    "detail": "healthz 200"
+  },
+  "1": {
+    "status": "blocked",
+    "detail": "HTTP 400"
+  },
+  "2": {
+    "status": "blocked",
+    "detail": "HTTP 200"
+  },
+  "3": {
+    "status": "error",
+    "detail": "needs stolen node creds"
+  },
+  "4": {
+    "status": "blocked",
+    "detail": "can-i list secrets -A: False"
+  },
+  "5": {
+    "status": "blocked",
+    "detail": "can-i get secret: False, secret exists: False"
+  }
+}
