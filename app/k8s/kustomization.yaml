@@ -1,13 +1,14 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# The Secret is intentionally NOT listed here so no API key is ever committed.
-# `make deploy` creates it imperatively from a throwaway key:
+# The Secret is intentionally NOT listed here so no token is ever committed.
+# `make app` creates it imperatively from a synthetic per-run canary token:
 #   kubectl -n summarizer create secret generic summarizer-key \
-#     --from-literal=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+#     --from-literal=CANARY_TOKEN=$CANARY_TOKEN
 resources:
   - namespace.yaml
   - serviceaccount.yaml
   - rbac.yaml
   - deployment.yaml
   - service.yaml
+  - receiver.yaml

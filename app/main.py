@@ -6,9 +6,11 @@ the same way DVWA or OWASP Juice Shop are, so the kill chain has something real
 to exploit. It ships three planted weaknesses, each tied to one step of the
 attack:
 
-  1. Secret in env         ANTHROPIC_API_KEY read straight from the environment,
+  1. Secret in env         CANARY_TOKEN read straight from the environment,
                            injected from a plaintext Kubernetes Secret. This is
-                           the trophy the attacker exfiltrates.
+                           the trophy the attacker exfiltrates. It is a SYNTHETIC
+                           canary minted per run, accepted only by the in-cluster
+                           lab receiver, so nothing real is ever exposed.
   2. SSRF (/summarize)     Fetches any caller-supplied URL server-side with no
                            allow-list, so a request can reach 169.254.169.254
                            and read the EC2 node's IMDS credentials.
@@ -16,8 +18,8 @@ attack:
      (/tools/diagnose)     giving remote code execution inside the pod (the
                            initial foothold).
 
-The blue-team overlay in ../defend replaces this with the keyless Bedrock
-pattern from aws-golden-path-copilot and removes all three weaknesses.
+The hardened image in ./hardened/main.py removes all three weaknesses in code,
+and the ../defend/hardened overlay adds the cluster-side controls on top.
 """
 from __future__ import annotations
 
@@ -30,9 +32,10 @@ from pydantic import BaseModel
 
 app = FastAPI(title="summarizer (LAB, vulnerable by design)")
 
-# WEAKNESS 1: the key lives in the environment, injected from a plaintext k8s
+# WEAKNESS 1: the trophy lives in the environment, injected from a plaintext k8s
 # Secret. Anyone with RCE in this pod, or read on the Secret, walks away with it.
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# The value is a synthetic per-run canary token, not a real vendor key.
+CANARY_TOKEN = os.environ.get("CANARY_TOKEN", "")
 
 
 class SummarizeRequest(BaseModel):
@@ -47,7 +50,7 @@ class SummarizeRequest(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "key_loaded": bool(ANTHROPIC_API_KEY)}
+    return {"status": "ok", "token_loaded": bool(CANARY_TOKEN)}
 
 
 @app.post("/summarize")

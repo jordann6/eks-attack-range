@@ -1,0 +1,4 @@
+# Current, scan-clean dependency set (the baseline pins old versions on purpose).
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.4

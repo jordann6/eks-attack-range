@@ -1,0 +1,68 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# AKS hardened overlay, parallel to defend/hardened/kustomization.yaml. Same
+# five fixes 1-2-4-5 (RBAC/automount/PodSecurity/securityContext/no-key-env);
+# fix 3 (node identity scope) is a Terraform change, not a manifest patch, see
+# infra/azure/keyvault.tf. Reuses app/k8s-aks as its base once that overlay
+# exists (written by `make aks-image`).
+resources:
+  - ../../app/k8s-aks
+
+patches:
+  - target:
+      kind: ClusterRoleBinding
+      name: summarizer-cluster-admin
+    patch: |
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: summarizer-cluster-admin
+
+  - target:
+      kind: ServiceAccount
+      name: summarizer
+    patch: |
+      - op: replace
+        path: /automountServiceAccountToken
+        value: false
+      - op: add
+        path: /metadata/labels
+        value:
+          azure.workload.identity/use: "true"
+
+  - target:
+      kind: Namespace
+      name: summarizer
+    patch: |
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: restricted
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1warn
+        value: restricted
+
+  - target:
+      kind: Deployment
+      name: summarizer
+    patch: |
+      - op: add
+        path: /spec/template/metadata/labels/azure.workload.identity~1use
+        value: "true"
+      - op: add
+        path: /spec/template/spec/securityContext
+        value:
+          runAsNonRoot: true
+          runAsUser: 10001
+          seccompProfile:
+            type: RuntimeDefault
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      - op: remove
+        path: /spec/template/spec/containers/0/env

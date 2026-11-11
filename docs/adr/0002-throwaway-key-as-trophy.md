@@ -1,6 +1,6 @@
 # ADR-0002: A throwaway Anthropic key is the trophy, scoped endpoint, no 0.0.0.0/0
 
-- **Status:** accepted
+- **Status:** accepted; rule 2 (throwaway key) superseded by [ADR-0003](0003-synthetic-canary-trophy-and-code-level-hardening.md)
 - **Date:** 2026-11-03
 
 ## Context

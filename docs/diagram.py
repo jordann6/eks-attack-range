@@ -33,7 +33,7 @@ with Diagram(
         node = EC2("managed node (EC2)\nIMDSv2, hop limit 2, broad role")
         with Cluster("namespace: summarizer"):
             pod = Pod("summarizer pod\n(cluster-admin SA)")
-            trophy = Secret("Secret: ANTHROPIC_API_KEY\n(plaintext in etcd)")
+            trophy = Secret("Secret: CANARY_TOKEN\n(synthetic, plaintext in etcd)")
         loot = SecretsManager("Secrets Manager\nprod/db-backup (decoy)")
 
     attacker >> red << nlb
