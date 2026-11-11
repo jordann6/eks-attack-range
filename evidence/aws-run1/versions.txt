@@ -1,0 +1,14 @@
+Terraform v1.11.3
+on darwin_arm64
++ provider registry.terraform.io/hashicorp/aws v5.100.0
++ provider registry.terraform.io/hashicorp/cloudinit v2.4.1
++ provider registry.terraform.io/hashicorp/null v3.3.2
++ provider registry.terraform.io/hashicorp/time v0.14.2
++ provider registry.terraform.io/hashicorp/tls v4.4.2
+
+Your version of Terraform is out of date! The latest version
+is 1.17.1. You can update by downloading from https://www.terraform.io/downloads.html
+Client Version: v1.37.2
+Kustomize Version: v5.8.1
+Server Version: v1.36.5-eks-577a51e
+cluster_version=1.36 (actually run: Server Version: v1.36.5-eks-577a51e)
