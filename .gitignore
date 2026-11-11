@@ -5,6 +5,7 @@
 *.tfvars
 !example.tfvars
 tfplan
+destroy.tfplan
 plan.json
 .terraform/
 crash.log
@@ -20,3 +21,4 @@ infracost.json
 # python
 __pycache__/
 *.pyc
+app/k8s-aks/

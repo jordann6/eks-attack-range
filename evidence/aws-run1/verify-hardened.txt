@@ -1,0 +1,13 @@
+1/5 cluster-admin binding removed
+  PASS
+2/5 SA token not auto-mounted
+  PASS
+3/5 hardened image in use (no trophy env)
+  PASS
+4/5 diagnose endpoint rejects shell metacharacters
+  PASS (400)
+5/5 summarize endpoint cannot be steered at IMDS
+  PASS (fixed upstream only)
+trophy Secret deleted (nothing to exfiltrate)
+  PASS
+ALL CONTROLS HOLD

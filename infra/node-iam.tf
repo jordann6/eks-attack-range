@@ -61,7 +61,7 @@ resource "aws_secretsmanager_secret" "loot" {
   description = "LAB DECOY. Fake credential used to demonstrate post-IMDS lateral movement."
   tags        = local.tags
 
-  # No recovery window so `make destroy` leaves nothing billable or lingering.
+  # No recovery window so `make destroy-plan` leaves nothing billable or lingering.
   recovery_window_in_days = 0
 }
 

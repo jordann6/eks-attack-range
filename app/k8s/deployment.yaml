@@ -23,14 +23,15 @@ spec:
           ports:
             - containerPort: 8000
           env:
-            # WEAKNESS 1: the trophy key is injected from a plaintext Secret as a
-            # plain environment variable. Visible in `kubectl get pod -o yaml`,
-            # in the Secret, and to anything with RCE in the container.
-            - name: ANTHROPIC_API_KEY
+            # WEAKNESS 1: the trophy token is injected from a plaintext Secret as
+            # a plain environment variable. Visible in `kubectl get pod -o yaml`,
+            # in the Secret, and to anything with RCE in the container. The value
+            # is a synthetic per-run canary, accepted only by the lab receiver.
+            - name: CANARY_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: summarizer-key
-                  key: ANTHROPIC_API_KEY
+                  key: CANARY_TOKEN
           # No securityContext on purpose: runs as root, privilege escalation
           # allowed, root filesystem writable. The hardened overlay drops all
           # capabilities, runs non-root, and sets readOnlyRootFilesystem: true.
