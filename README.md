@@ -5,12 +5,12 @@ Kubernetes and AWS misconfigurations into a full compromise, and the blue-team
 overlay that detects and reverses every step. It is the cloud translation of a
 host-centric ethical-hacking course: the course runs recon, exploitation,
 privilege escalation and automation against a local CTF virtual machine; this
-runs the same lifecycle against managed Kubernetes, and ends by stealing an API
-key out of a running pod.
+runs the same lifecycle against managed Kubernetes, and ends by stealing a canary
+credential out of a running pod.
 
 Everything is authorized and self-contained: it runs in my own sandbox account,
 the control-plane endpoint is locked to my own IP, the stolen "key" is a
-throwaway revoked at the end, and the whole thing is deploy, demo, destroy.
+synthetic canary with nothing to revoke, and the whole thing is deploy, demo, destroy.
 
 ## Problem
 
@@ -32,9 +32,9 @@ the app gives RCE in the pod (1). From the pod, SSRF reaches the EC2 node's
 instance metadata service and steals its IAM role credentials (2), which read
 Secrets Manager account-wide (3). The pod's auto-mounted ServiceAccount token is
 bound to cluster-admin, so it drives the API server directly (4) and reads the
-plaintext Claude API key out of etcd (5). The control-plane audit log catches the
-privilege escalation directly; GuardDuty and Falco are armed for the runtime side
-(blue).*
+plaintext canary credential out of etcd (5). The control-plane audit log can show
+the escalation when the stolen token is really used; GuardDuty and Falco are armed
+for the runtime side (blue).*
 
 ## Decisions
 
@@ -98,24 +98,51 @@ privilege escalation directly; GuardDuty and Falco are armed for the runtime sid
 
 ## What the live run proved
 
-> Note: the suite was restructured (code-level hardened image, a synthetic
-> canary trophy, and a per-stage demo that judges each control independently).
-> The results below are from the earlier live run; a fresh run against the new
-> suite is pending and will replace this section.
+Session A on EKS 1.36.5 (`evidence/aws-run1/`), run against the restructured
+suite (code-level hardened image, synthetic canary trophy, per-stage demo that
+judges each control and never shows an error as blocked). One deploy, baseline
+demo, harden, hardened demo, destroy, in an isolated account.
 
-One full deploy / demo / destroy in an isolated account:
+| Stage | Name | Baseline | Hardened | Control layer |
+|---|---|---|---|---|
+| 0 | Recon | info | info | discovery |
+| 1 | Foothold via RCE | exploited | blocked | app (input validation) |
+| 2 | SSRF to IMDS | exploited | blocked | app (fixed upstream) and cloud (IMDS hop limit) |
+| 3 | Lateral move with node creds | exploited | error | cloud (scoped node IAM role) |
+| 4 | Privilege escalation via SA token | exploited | blocked | Kubernetes (RBAC, automount off) |
+| 5 | Trophy, read the canary Secret | exploited | blocked | Kubernetes (RBAC), no secret in env |
 
-- All five stages landed against live infrastructure: RCE as `uid=0(root)`, node
-  role credentials stolen via the SSRF doing the IMDSv2 handshake, the decoy
-  `prod/db-backup` secret read with those creds, secrets listed cluster-wide with
-  the pod's cluster-admin token, and the Claude API key exfiltrated.
-- The EKS audit log caught the privilege escalation directly:
-  `system:serviceaccount:summarizer:summarizer` doing `list` then `get` on
+- The baseline chain landed end to end. RCE as root, node role credentials
+  stolen through the app's own SSRF by doing the IMDSv2 token handshake, the
+  decoy `attack-range/prod/db-backup` secret read with those stolen
+  credentials, and the cluster-admin token driving the API to the canary.
+- `make verify-hardened` printed ALL CONTROLS HOLD for the five controls.
+  Stage 3 reads `error` on the hardened run because it needs the credentials
+  stage 2 no longer yields, which is the documented expectation and not a pass
+  by itself.
+- **The rerun found a bug in the lab itself.** Stage 3 was wired to classify
+  with no credentials unconditionally, so it could only ever report `error`
+  and looked like a correct hardened result. It now steals the node
+  credentials through the SSRF and pivots to a real secret read, so the
+  baseline reads `exploited` for the right reason.
+- **Detection is two honest misses.** GuardDuty's credential-exfiltration
+  finding did not fire inside the session. The documented audit queries for
+  stages 4 and 5 matched nothing, because the demo checks those stages with
+  `kubectl auth can-i --as`. That is a SubjectAccessReview under the
+  operator's identity, and EKS's default audit policy does not log that verb.
+  The queries catch a real call made with the stolen token, not the
+  assume-breach simulation (`evidence/aws-run1/detection.md`). The earlier
+  live run, with the real token, did show the escalation in the audit log as
+  `system:serviceaccount:summarizer:summarizer` listing then getting
   `secrets/summarizer-key`.
-- After the blue-team overlay, the same kill chain could not escalate: the SA
-  token was no longer mounted, `auth can-i list secrets` returned `no`, the
-  cluster-admin binding was gone, and the pod ran as `uid=10001` with no key to
-  steal. Then the throwaway key was revoked and everything torn down.
+- Teardown removed 64 resources and `make verify-gone` reported all four
+  categories empty.
+
+An AKS port is designed but has not run
+([ADR-0004](docs/adr/0004-aks-port.md)). IMDS has no hop limit on AKS, so the
+control becomes an egress policy, the node identity is a managed identity,
+and Defender for Containers is recorded beside Falco, because the
+self-healing lab's own AKS run saw it raise no alert naming the attacked pod.
 
 ## Run it
 
