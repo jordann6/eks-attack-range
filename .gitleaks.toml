@@ -1,0 +1,17 @@
+# gitleaks config for the attack range. The repo is a security lab, so its unit
+# test fixtures carry synthetic, AWS-shaped placeholders (for example an
+# AKIA-prefixed string that matches the access-key pattern) that are not real
+# credentials. Allowlist those test files by path so the full-history scan does
+# not flag the placeholders, while every other path is still scanned with the
+# default rules.
+title = "eks-attack-range"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic AWS-shaped placeholders live only in these unit test fixtures"
+paths = [
+  '''attack/test_demo.py''',
+  '''deception/alert/test_credential_alert.py''',
+]
