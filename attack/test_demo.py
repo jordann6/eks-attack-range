@@ -204,15 +204,15 @@ class TestClassifyD4Reach(unittest.TestCase):
 
 
 class TestDetection(unittest.TestCase):
-    def _rec(self, t="2026-11-19T03:00:10Z", method="source-ip"):
-        return {"event_time": t, "attribution": {"method": method}}
+    def _rec(self, t="2026-11-19T03:00:10Z", method="source-ip", alerted_at=None):
+        return {"event_time": t, "attribution": {"method": method}, "alerted_at": alerted_at}
 
     def test_fresh_record_is_detected_and_attributed(self):
         use = demo._parse_iso("2026-11-19T03:00:05+00:00")
-        d = demo.classify_detection(EXPLOITED, self._rec(), use)
+        d = demo.classify_detection(EXPLOITED, self._rec(alerted_at=use + 3.0), use)
         self.assertEqual(d["detection"], "detected")
         self.assertTrue(d["attributed"])
-        self.assertEqual(d["alert_s"], 5.0)
+        self.assertEqual(d["alert_s"], 3.0)
 
     def test_unattributed_record_is_detected_but_not_attributed(self):
         use = demo._parse_iso("2026-11-19T03:00:05+00:00")

@@ -62,3 +62,8 @@ output "cluster_log_group" {
   description = "EKS control-plane log group the audit subscription filter reads."
   value       = module.eks.cloudwatch_log_group_name
 }
+
+output "ir_kms_key_arn" {
+  description = "CMK that encrypts the IR bucket and topic; passed to the responder for SCP-compliant puts."
+  value       = aws_kms_key.ir.arn
+}

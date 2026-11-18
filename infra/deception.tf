@@ -140,6 +140,7 @@ resource "aws_lambda_function" "credential_alert" {
     variables = {
       BUCKET          = aws_s3_bucket.ir_events.bucket
       TOPIC_ARN       = aws_sns_topic.ir_alerts.arn
+      KMS_KEY_ARN     = aws_kms_key.ir.arn
       MAP_PREFIX      = local.credential_map_prefix
       DECOY_USER      = aws_iam_user.decoy.name
       DECOY_SECRET    = local.decoy_secret_name

@@ -371,12 +371,16 @@ def classify_detection(reach: str, record: dict | None, use_epoch: float) -> dic
         return {"detection": NA, "alert_s": None, "attributed": None}
     if not record:
         return {"detection": MISSED, "alert_s": None, "attributed": None}
-    secs = seconds_to(record.get("event_time", ""), use_epoch)
-    if secs is None:
+    # Stale guard: the event's own timestamp must not predate this run's use
+    # (that would be a leftover record from an earlier use the same day).
+    if seconds_to(record.get("event_time", ""), use_epoch) is None:
         return {"detection": MISSED, "alert_s": None, "attributed": None,
                 "note": "record present but stale (predates this run)"}
+    # Detection latency is use -> alert written (the Lambda's clock), not the
+    # event's own time, which is ~= the use time and would always read ~0.
+    alert_s = seconds_to_epoch(record.get("alerted_at"), use_epoch)
     attr = (record.get("attribution") or {}).get("method", "none")
-    return {"detection": DETECTED, "alert_s": secs, "attributed": attr != "none",
+    return {"detection": DETECTED, "alert_s": alert_s, "attributed": attr != "none",
             "attribution": attr}
 
 
@@ -482,6 +486,10 @@ def _use_key_get_caller_identity(creds: dict) -> bool | None:
     env["AWS_ACCESS_KEY_ID"] = creds["AccessKeyId"]
     env["AWS_SECRET_ACCESS_KEY"] = creds["SecretAccessKey"]
     env.pop("AWS_SESSION_TOKEN", None)
+    # Sign as the decoy, never the operator: a set AWS_PROFILE would otherwise
+    # shadow these keys, and D1 would test the wrong identity.
+    env.pop("AWS_PROFILE", None)
+    env.pop("AWS_DEFAULT_PROFILE", None)
     env["AWS_REGION"] = AWS_REGION
     try:
         r = subprocess.run(["aws", "sts", "get-caller-identity", "--output", "json"],
@@ -654,9 +662,15 @@ def run_stage6(app_url: str, stages: dict, order: str = IMDS_FIRST, bucket: str 
                detect_timeout: float = DETECT_TIMEOUT_S, contain_timeout: float = CONTAIN_TIMEOUT_S) -> dict:
     rce_ok = stages.get("1", {}).get("status") == EXPLOITED
     held = _held_before_alert(stages, order)
+    # Phase 1: take and use every decoy FIRST, while the pod is still reachable.
+    # The response to any one decoy quarantines the pod (deny-all), which would
+    # then block reaching the others through it. So all uses happen up front,
+    # then detection and containment are polled.
+    reaches = {d: _decoy_reach(app_url, d, rce_ok) for d in DECOYS}
+    # Phase 2: poll each decoy's alert and quarantine record.
     decoys: dict[str, dict] = {}
     for d in DECOYS:
-        reach, use_epoch = _decoy_reach(app_url, d, rce_ok)
+        reach, use_epoch = reaches[d]
         entry = {"name": DECOY_NAMES[d], "reach": reach, "held_before_alert": held}
         if reach == EXPLOITED and use_epoch is not None:
             key = f"alerts/{d}/{_utc_day(use_epoch)}.json"
@@ -674,6 +688,50 @@ def run_stage6(app_url: str, stages: dict, order: str = IMDS_FIRST, bucket: str 
         decoys[d] = entry
     worst = _stage6_status(decoys)
     return {"status": worst, "order": order, "decoys": decoys}
+
+
+def run_decoy_first(app_url: str, bucket: str = IR_BUCKET,
+                    detect_timeout: float = DETECT_TIMEOUT_S,
+                    contain_timeout: float = CONTAIN_TIMEOUT_S) -> dict:
+    """The original tip's premise: the attacker reads and tests the planted key
+    before pivoting. If quarantine lands first, the pod is isolated and the rest
+    of the chain (IMDS pivot, node creds, SA token, trophy) never happens. This
+    is the one order where the decoy is a shield, not just a tripwire."""
+    results: dict[str, dict] = {}
+    code, _ = _http(f"{app_url}/healthz")
+    results["0"] = {"status": INFO, "detail": f"healthz {code}"}
+    code, body = _http(f"{app_url}/tools/diagnose?host=127.0.0.1%3Bid")
+    try:
+        stdout = json.loads(body).get("stdout", "")
+    except Exception:  # noqa: BLE001
+        stdout = body
+    results["1"] = {"status": classify_rce(code, stdout), "detail": f"HTTP {code}"}
+    rce_ok = results["1"]["status"] == EXPLOITED
+
+    # Use the planted key first, then wait for the quarantine it triggers.
+    reach, use_epoch = _decoy_reach(app_url, "D1", rce_ok)
+    alert = _poll_record(bucket, f"alerts/D1/{_utc_day(use_epoch)}.json", detect_timeout) if use_epoch else None
+    det = classify_detection(reach, alert, use_epoch or 0.0)
+    qrec = (_poll_record(bucket, f"quarantine/D1/{_utc_day(use_epoch)}.json", contain_timeout)
+            if det["detection"] == DETECTED else None)
+    cont = classify_containment(det["detection"], qrec, use_epoch or 0.0)
+    d1 = {"name": DECOY_NAMES["D1"], "reach": reach, "held_before_alert": [], **det, **cont}
+    results["6"] = {"status": reach, "order": DECOY_FIRST, "decoys": {"D1": d1}}
+
+    # Now attempt the pivot the attacker would have made next. With the pod
+    # isolated, these cannot even be reached, which is the point: the decoy
+    # stopped the chain before any real credential was taken.
+    # The quarantine record marks when the pod was LABELLED, not when the VPC
+    # CNI dataplane actually denies traffic, which lags by seconds. So report the
+    # post-label stages factually: a stage still exploited means the attacker beat
+    # enforcement, a stage that errors (unreachable) means isolation has engaged.
+    qs = cont.get("quarantine_s")
+    note = f"after D1 quarantine label ({qs}s): " if qs is not None else "after D1 use (not contained): "
+    post = run_stages(app_url)
+    for k in ("2", "3", "4", "5"):
+        r = post.get(k, {"status": ERROR, "detail": ""})
+        results[k] = {"status": r["status"], "detail": note + r.get("detail", "")}
+    return results
 
 
 def _stage6_status(decoys: dict) -> str:
@@ -698,7 +756,7 @@ def render_run(results: dict) -> str:
         out += ["", f"### Stage 6 decoys ({s6['order']})", "",
                 "| Decoy | Reach | Detected | Alert s | Attributed | Contained | Quarantine s | Held before alert |",
                 "|---|---|---|---|---|---|---|---|"]
-        for d in DECOYS:
+        for d in [x for x in DECOYS if x in s6["decoys"]]:
             e = s6["decoys"][d]
             out.append(f"| {d} {e['name']} | {e['reach']} | {e.get('detection', NA)} | "
                        f"{_fmt(e.get('alert_s'))} | {_fmt_attr(e.get('attributed'))} | "
@@ -738,11 +796,7 @@ def main() -> int:
         return 2
 
     if args.order == DECOY_FIRST and not args.no_decoys:
-        # Test the planted key first (the original tip's premise), then run the
-        # chain against a possibly-quarantined pod.
-        pre = run_stages(app_url, assume_breach=args.assume_breach)
-        results = run_stages(app_url, assume_breach=args.assume_breach)
-        results["6"] = run_stage6(app_url, pre, order=DECOY_FIRST)
+        results = run_decoy_first(app_url, IR_BUCKET)
     else:
         results = run_stages(app_url, assume_breach=args.assume_breach)
         if not args.no_decoys:

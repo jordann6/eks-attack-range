@@ -66,6 +66,7 @@ spec:
       containers:
         - name: responder
           image: incident-responder:set-by-make
+          imagePullPolicy: Always
           env:
             - name: BUCKET
               value: set-by-make

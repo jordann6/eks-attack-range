@@ -51,6 +51,7 @@ DECOY_NAMESPACE = os.environ.get("DECOY_NAMESPACE", "summarizer")
 MAP_PREFIX = os.environ.get("MAP_PREFIX", "")
 BUCKET = os.environ.get("BUCKET", "")
 TOPIC_ARN = os.environ.get("TOPIC_ARN", "")
+KMS_KEY_ARN = os.environ.get("KMS_KEY_ARN", "")
 
 POD_NAME_EXTRA = "authentication.kubernetes.io/pod-name"
 SA_PREFIX = "system:serviceaccount:"
@@ -200,9 +201,14 @@ def handler(event, _context):
         rec["attribution"] = attribution(rec, mapped)
         rec["alerted_at"] = time.time()
         key = record_key(rec["decoy"], rec["event_time"])
+        put = dict(Bucket=BUCKET, Key=key, Body=json.dumps(rec).encode(),
+                   ContentType="application/json", IfNoneMatch="*")
+        if KMS_KEY_ARN:
+            # The account's SCP denies PutObject without an explicit SSE-KMS
+            # header, even when bucket default encryption would apply it.
+            put.update(ServerSideEncryption="aws:kms", SSEKMSKeyId=KMS_KEY_ARN)
         try:
-            s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(rec).encode(),
-                          ContentType="application/json", IfNoneMatch="*")
+            s3.put_object(**put)
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
                 print(json.dumps({"duplicate": key, "event_id": rec["event_id"]}))

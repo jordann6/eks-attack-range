@@ -121,6 +121,7 @@ decoys: ## Plant D1/D3/D4, push + deploy the responder, mint the D1 key out of s
 	$(eval USERNAME := $(shell $(TF) output -raw decoy_user_name))
 	$(eval MAPPREFIX := $(shell $(TF) output -raw credential_map_prefix))
 	$(eval ROLEARN := $(shell $(TF) output -raw responder_role_arn))
+	$(eval KMSARN := $(shell $(TF) output -raw ir_kms_key_arn))
 	$(eval REGION := $(shell $(TF) output -raw region))
 	aws ecr get-login-password --region $(REGION) | docker login --username AWS --password-stdin $(REGISTRY)
 	docker build --platform linux/amd64 -t $(ECR):responder-ir deception/responder
@@ -135,7 +136,7 @@ decoys: ## Plant D1/D3/D4, push + deploy the responder, mint the D1 key out of s
 	kubectl apply -k deception/k8s
 	kubectl -n security-tools annotate serviceaccount incident-responder \
 		eks.amazonaws.com/role-arn=$(ROLEARN) --overwrite
-	kubectl -n security-tools set env deployment/incident-responder BUCKET=$(BUCKET)
+	kubectl -n security-tools set env deployment/incident-responder BUCKET=$(BUCKET) KMS_KEY_ARN=$(KMSARN)
 	kubectl -n security-tools set image deployment/incident-responder responder=$(ECR):responder-ir
 	kubectl -n security-tools rollout status deployment/incident-responder
 	# D1: mint ONE access key on the zero-policy user and plant it in the pod. The
@@ -186,7 +187,7 @@ verify-decoys: ## Prove the deception layer is armed (zero-policy user, rule sta
 	echo "5/6 quarantine NetworkPolicy present and enforcement on"; \
 	if kubectl -n $(NS) get networkpolicy quarantine >/dev/null 2>&1 \
 		&& [ "$$(kubectl -n kube-system get ds aws-node -o jsonpath='{.status.numberReady}')" -gt 0 ] \
-		&& kubectl -n kube-system get ds aws-node -o jsonpath='{.spec.template.spec.containers[*].name}' | grep -q aws-network-policy-agent; \
+		&& kubectl -n kube-system get ds aws-node -o jsonpath='{.spec.template.spec.containers[*].name}' | grep -qE "aws-eks-nodeagent|aws-network-policy-agent"; \
 		then echo "  PASS"; else echo "  FAIL (policy or agent missing)"; fail=1; fi; \
 	echo "6/6 responder running with least-privilege Role"; \
 	if [ "$$(kubectl -n security-tools get deploy incident-responder -o jsonpath='{.status.readyReplicas}')" = 1 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi; \

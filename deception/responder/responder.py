@@ -31,6 +31,7 @@ SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 API = "https://kubernetes.default.svc"
 
 BUCKET = os.environ.get("BUCKET", "")
+KMS_KEY_ARN = os.environ.get("KMS_KEY_ARN", "")
 POLL_S = float(os.environ.get("POLL_S", "2"))
 ALLOWED_NAMESPACES = set(filter(None, os.environ.get("ALLOWED_NAMESPACES", "summarizer").split(",")))
 
@@ -138,7 +139,10 @@ def handle(s3, key: str) -> dict | None:
     for n in names:
         _label(attr["namespace"], n, alert.get("decoy", ""))
     rec = quarantine_record(alert, key, names, how, time.time())
-    s3.put_object(Bucket=BUCKET, Key=qkey, Body=json.dumps(rec).encode(), ContentType="application/json")
+    put = dict(Bucket=BUCKET, Key=qkey, Body=json.dumps(rec).encode(), ContentType="application/json")
+    if KMS_KEY_ARN:
+        put.update(ServerSideEncryption="aws:kms", SSEKMSKeyId=KMS_KEY_ARN)
+    s3.put_object(**put)
     print(json.dumps(rec), flush=True)
     return rec
 
