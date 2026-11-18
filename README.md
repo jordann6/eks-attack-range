@@ -98,19 +98,21 @@ for the runtime side (blue).*
 
 ## What the live run proved
 
-Session A on EKS 1.36.5 (`evidence/aws-run1/`), run against the restructured
-suite (code-level hardened image, synthetic canary trophy, per-stage demo that
-judges each control and never shows an error as blocked). One deploy, baseline
-demo, harden, hardened demo, destroy, in an isolated account.
+Two live sessions on EKS 1.36. Session A (`evidence/aws-run1/`) landed the chain
+but left two honest detection misses. Session B (`evidence/aws-run2/`) fixed the
+cause of one miss and added the deception layer, so the same chain is now caught
+and contained. Each session was one deploy, baseline demo, harden, hardened demo,
+destroy, in an isolated account.
 
-| Stage | Name | Baseline | Hardened | Control layer |
-|---|---|---|---|---|
-| 0 | Recon | info | info | discovery |
-| 1 | Foothold via RCE | exploited | blocked | app (input validation) |
-| 2 | SSRF to IMDS | exploited | blocked | app (fixed upstream) and cloud (IMDS hop limit) |
-| 3 | Lateral move with node creds | exploited | error | cloud (scoped node IAM role) |
-| 4 | Privilege escalation via SA token | exploited | blocked | Kubernetes (RBAC, automount off) |
-| 5 | Trophy, read the canary Secret | exploited | blocked | Kubernetes (RBAC), no secret in env |
+| Stage | Name | Baseline | Hardened | Detection | Control layer |
+|---|---|---|---|---|---|
+| 0 | Recon | info | info | - | discovery |
+| 1 | Foothold via RCE | exploited | blocked | - | app (input validation) |
+| 2 | SSRF to IMDS | exploited | blocked | - | app (fixed upstream) and cloud (IMDS hop limit) |
+| 3 | Lateral move with node creds | exploited | error | - | cloud (scoped node IAM role) |
+| 4 | Privilege escalation via SA token | exploited | blocked | audit log | Kubernetes (RBAC, automount off) |
+| 5 | Trophy, read the canary Secret | exploited | blocked | audit log | Kubernetes (RBAC), no secret in env |
+| 6 | Decoys, take and use planted credentials | exploited (detected) | error (unreachable) | CloudTrail + audit log | detection + pod quarantine |
 
 - The baseline chain landed end to end. RCE as root, node role credentials
   stolen through the app's own SSRF by doing the IMDSv2 token handshake, the
@@ -120,23 +122,50 @@ demo, harden, hardened demo, destroy, in an isolated account.
   Stage 3 reads `error` on the hardened run because it needs the credentials
   stage 2 no longer yields, which is the documented expectation and not a pass
   by itself.
-- **The rerun found a bug in the lab itself.** Stage 3 was wired to classify
-  with no credentials unconditionally, so it could only ever report `error`
-  and looked like a correct hardened result. It now steals the node
-  credentials through the SSRF and pivots to a real secret read, so the
-  baseline reads `exploited` for the right reason.
-- **Detection is two honest misses.** GuardDuty's credential-exfiltration
-  finding did not fire inside the session. The documented audit queries for
-  stages 4 and 5 matched nothing, because the demo checks those stages with
-  `kubectl auth can-i --as`. That is a SubjectAccessReview under the
-  operator's identity, and EKS's default audit policy does not log that verb.
-  The queries catch a real call made with the stolen token, not the
-  assume-breach simulation (`evidence/aws-run1/detection.md`). The earlier
-  live run, with the real token, did show the escalation in the audit log as
+- **Stages 4 and 5 now make real calls.** They read the pod's own mounted
+  ServiceAccount token and call the API server, so the caller is the
+  ServiceAccount and the escalation appears in the audit log as
   `system:serviceaccount:summarizer:summarizer` listing then getting
-  `secrets/summarizer-key`.
-- Teardown removed 64 resources and `make verify-gone` reported all four
-  categories empty.
+  `secrets/summarizer-key`, which the documented queries match. The old method,
+  `kubectl auth can-i --as`, was a SubjectAccessReview under the operator that
+  EKS never logs, which is why Session A's queries matched nothing
+  (`evidence/aws-run1/detection.md`). The `--assume-breach` flag keeps that
+  direct RBAC check for the hardened run.
+- **GuardDuty stayed silent** in both sessions' windows, recorded as a miss, not
+  smoothed over.
+
+### Deception layer (Session B)
+
+Three credentials are planted along the chain and nothing legitimate ever uses
+them, so any use is an intruder. A single alert function catches each one, an
+in-cluster responder quarantines the attributed pod with a deny-all
+NetworkPolicy, and the demo records seconds to alert and to contained
+([ADR-0005](docs/adr/0005-decoy-credentials.md), `evidence/aws-run2/`).
+
+| Decoy | Planted | Caught by | Baseline result |
+|---|---|---|---|
+| D1 | AWS key in `/root/.aws/credentials` in the pod | CloudTrail via EventBridge | detected 2.1s, quarantined 3.9s |
+| D3 | Secret `prod-db-backup-creds` | EKS audit log | detected 2.2s, quarantined 3.9s |
+| D4 | unbound ServiceAccount `backup-operator` token | EKS audit log | detected 2.4s, quarantined 3.9s |
+
+Each was attributed to the summarizer pod, D1 through a key-to-Secret map, D3 and
+D4 through the audit event source IP, which is the pod's own IP because in-VPC
+traffic to the API server is not source-NATed (verified as the first live check).
+
+- **The decoy is a tripwire, not a shield, and the run says so.** In the
+  realistic order the attacker already holds the node role, the ServiceAccount
+  token and the trophy when the first alarm fires. A "held before alert" column
+  records exactly that.
+- **Even tested first, enforcement lags.** In the decoy-first order the planted
+  key is used before the pivot. Detection is 2.2s and the quarantine label lands
+  at 3.4s, but the VPC CNI dataplane takes a few more seconds to deny traffic, so
+  the SSRF still reaches IMDS and the deeper pivot is cut off mid-step. The label
+  time is not the enforcement time.
+- The node-level response, revoking the already-stolen node session, is out of
+  scope here and proven in `aws-incident-forensics` (ADR-0005).
+- Teardown removed every resource, deleted the minted decoy key first, and
+  `make verify-gone` plus an out-of-band sweep reported the cluster, the decoy
+  user and key, the alert bucket, rule and function all gone.
 
 An AKS port is designed but has not run
 ([ADR-0004](docs/adr/0004-aks-port.md)). IMDS has no hop limit on AKS, so the
@@ -153,10 +182,11 @@ Authorized use only, against infrastructure you own. Full steps in
 export AWS_PROFILE=<sandbox>
 make plan            # saved plan, endpoint scoped to your IP; read it, apply infra/tfplan
 make deploy          # after the apply: images + app + receiver
-make demo            # judge every stage on the baseline (expect all exploited)
+make decoys          # plant D1/D3/D4, deploy the responder, mint the D1 key out of state, verify
+make demo            # judge every stage on the baseline; stage 6 = decoys detected + quarantined
 make harden          # hardened image + overlay, delete the trophy Secret, then verify
 make verify-hardened # prove all five controls hold (run again or part of harden)
-make destroy-plan    # remove the app, write destroy.tfplan; apply it, then make verify-gone
+make destroy-plan    # delete the decoy key, remove the app, write destroy.tfplan; apply, then make verify-gone
 ```
 
 No vendor API key is needed. The trophy is a synthetic canary token minted per
