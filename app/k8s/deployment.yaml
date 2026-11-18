@@ -35,3 +35,17 @@ spec:
           # No securityContext on purpose: runs as root, privilege escalation
           # allowed, root filesystem writable. The hardened overlay drops all
           # capabilities, runs non-root, and sets readOnlyRootFilesystem: true.
+          # D1 (ADR-0005): the file an intruder looks for first. The Secret holds
+          # a real access key on a zero-policy IAM user, minted by `make decoys`
+          # and never committed. optional: true, so the app deploys the same with
+          # or without the deception layer. Any API call signed with this key is
+          # caught from CloudTrail and quarantines the pod that mounts it.
+          volumeMounts:
+            - name: aws-credentials
+              mountPath: /root/.aws
+              readOnly: true
+      volumes:
+        - name: aws-credentials
+          secret:
+            secretName: backup-sync-aws
+            optional: true

@@ -1,0 +1,21 @@
+# Pod quarantine. Selects nothing until the responder labels a pod, so the
+# baseline's behaviour is unchanged. Once a pod carries the label, all ingress
+# (the NLB can no longer reach the foothold) and all egress (including IMDS at
+# 169.254.169.254 and the API server) are denied. Enforced by the VPC CNI's
+# network policy agent (enableNetworkPolicy in infra/eks.tf).
+#
+# The label is not in the Deployment's selector, so the ReplicaSet keeps owning
+# the pod and does not replace it: the pod stays up for forensics, it just
+# cannot talk to anything.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: quarantine
+  namespace: summarizer
+spec:
+  podSelector:
+    matchLabels:
+      security.attack-range/quarantine: "true"
+  policyTypes:
+    - Ingress
+    - Egress

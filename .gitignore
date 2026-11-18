@@ -22,3 +22,6 @@ infracost.json
 __pycache__/
 *.pyc
 app/k8s-aks/
+
+# Lambda zips written by archive_file at plan time
+build/

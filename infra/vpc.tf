@@ -1,5 +1,14 @@
+# Pinned by name (checkov CKV_AWS_394) so the set cannot grow when AWS adds a
+# zone. These are the same two zones the slice below always picked: the first
+# two names in sorted order. If a lab account's mapping makes one of them a
+# zone EKS does not support, change the list here, not the slice.
 data "aws_availability_zones" "available" {
   state = "available"
+
+  filter {
+    name   = "zone-name"
+    values = ["${var.region}a", "${var.region}b"]
+  }
 }
 
 locals {

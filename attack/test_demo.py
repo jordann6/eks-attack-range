@@ -155,5 +155,137 @@ class TestPivotReadLoot(unittest.TestCase):
             self.assertIsNone(demo._pivot_read_loot(self._creds()))
 
 
+# --- real-call stages 4/5 and the deception layer (ADR-0005) ----------------
+
+class TestClassifyApiCall(unittest.TestCase):
+    def test_200_is_exploited(self):
+        self.assertEqual(demo.classify_api_call(True, {"token": True, "code": 200, "count": 9}), EXPLOITED)
+
+    def test_403_is_blocked(self):
+        self.assertEqual(demo.classify_api_call(True, {"token": True, "code": 403}), BLOCKED)
+
+    def test_token_not_mounted_is_blocked(self):
+        self.assertEqual(demo.classify_api_call(True, {"token": False}), BLOCKED)
+
+    def test_no_foothold_is_error_not_blocked(self):
+        self.assertEqual(demo.classify_api_call(False, None), ERROR)
+
+    def test_probe_returned_nothing_is_error(self):
+        self.assertEqual(demo.classify_api_call(True, None), ERROR)
+
+    def test_trophy_404_is_blocked_only_when_expected(self):
+        self.assertEqual(demo.classify_api_call(True, {"token": True, "code": 404}, not_found_blocked=True), BLOCKED)
+        self.assertEqual(demo.classify_api_call(True, {"token": True, "code": 404}), ERROR)
+
+
+class TestClassifyD1Reach(unittest.TestCase):
+    def test_found_and_used_is_exploited(self):
+        self.assertEqual(demo.classify_d1_reach(True, True, True), EXPLOITED)
+
+    def test_file_absent_is_error(self):
+        self.assertEqual(demo.classify_d1_reach(True, False, None), ERROR)
+
+    def test_key_broke_is_error_not_a_verdict(self):
+        self.assertEqual(demo.classify_d1_reach(True, True, False), ERROR)
+
+    def test_no_foothold_is_error(self):
+        self.assertEqual(demo.classify_d1_reach(False, None, None), ERROR)
+
+
+class TestClassifyD4Reach(unittest.TestCase):
+    def test_used_even_403_is_exploited(self):
+        self.assertEqual(demo.classify_d4_reach(True, True), EXPLOITED)
+
+    def test_not_used_is_error(self):
+        self.assertEqual(demo.classify_d4_reach(True, False), ERROR)
+
+    def test_no_foothold_is_error(self):
+        self.assertEqual(demo.classify_d4_reach(False, None), ERROR)
+
+
+class TestDetection(unittest.TestCase):
+    def _rec(self, t="2026-11-19T03:00:10Z", method="source-ip"):
+        return {"event_time": t, "attribution": {"method": method}}
+
+    def test_fresh_record_is_detected_and_attributed(self):
+        use = demo._parse_iso("2026-11-19T03:00:05+00:00")
+        d = demo.classify_detection(EXPLOITED, self._rec(), use)
+        self.assertEqual(d["detection"], "detected")
+        self.assertTrue(d["attributed"])
+        self.assertEqual(d["alert_s"], 5.0)
+
+    def test_unattributed_record_is_detected_but_not_attributed(self):
+        use = demo._parse_iso("2026-11-19T03:00:05+00:00")
+        d = demo.classify_detection(EXPLOITED, self._rec(method="none"), use)
+        self.assertEqual(d["detection"], "detected")
+        self.assertFalse(d["attributed"])
+
+    def test_no_record_is_missed(self):
+        self.assertEqual(demo.classify_detection(EXPLOITED, None, 1.0)["detection"], "missed")
+
+    def test_stale_record_is_missed_not_detected(self):
+        use = demo._parse_iso("2026-11-19T03:00:05+00:00")
+        d = demo.classify_detection(EXPLOITED, self._rec(t="2026-11-18T00:00:00Z"), use)
+        self.assertEqual(d["detection"], "missed")
+
+    def test_unreached_decoy_is_na(self):
+        self.assertEqual(demo.classify_detection(ERROR, None, 1.0)["detection"], "n/a")
+
+
+class TestContainment(unittest.TestCase):
+    def test_quarantined_is_contained_with_seconds(self):
+        use = 100.0
+        rec = {"quarantined": True, "pods": ["summarizer-a"], "quarantined_at": 104.0}
+        c = demo.classify_containment("detected", rec, use)
+        self.assertEqual(c["containment"], "contained")
+        self.assertEqual(c["quarantine_s"], 4.0)
+        self.assertEqual(c["pods"], ["summarizer-a"])
+
+    def test_record_without_pods_is_not_contained(self):
+        rec = {"quarantined": False, "how": "source IP matched no running pod"}
+        self.assertEqual(demo.classify_containment("detected", rec, 1.0)["containment"], "not contained")
+
+    def test_no_record_is_not_contained(self):
+        self.assertEqual(demo.classify_containment("detected", None, 1.0)["containment"], "not contained")
+
+    def test_missed_detection_makes_containment_na(self):
+        self.assertEqual(demo.classify_containment("missed", None, 1.0)["containment"], "n/a")
+
+
+class TestSecondsTo(unittest.TestCase):
+    def test_positive_delta(self):
+        use = demo._parse_iso("2026-11-19T03:00:00+00:00")
+        self.assertEqual(demo.seconds_to("2026-11-19T03:00:07Z", use), 7.0)
+
+    def test_stale_is_none(self):
+        use = demo._parse_iso("2026-11-19T03:00:00+00:00")
+        self.assertIsNone(demo.seconds_to("2026-11-19T02:00:00Z", use))
+
+    def test_empty_is_none(self):
+        self.assertIsNone(demo.seconds_to("", 1.0))
+
+
+class TestStage6Shape(unittest.TestCase):
+    def test_held_before_alert_imds_first_lists_taken_creds(self):
+        stages = {"3": {"status": EXPLOITED}, "4": {"status": EXPLOITED}, "5": {"status": BLOCKED}}
+        held = demo._held_before_alert(stages, demo.IMDS_FIRST)
+        self.assertIn("node role creds (Secrets Manager read)", held)
+        self.assertIn("cluster-admin SA token", held)
+        self.assertNotIn("trophy canary token", held)
+
+    def test_held_before_alert_decoy_first_is_empty(self):
+        stages = {"3": {"status": EXPLOITED}}
+        self.assertEqual(demo._held_before_alert(stages, demo.DECOY_FIRST), [])
+
+    def test_status_exploited_if_any_decoy_reached(self):
+        self.assertEqual(demo._stage6_status({"D1": {"reach": EXPLOITED}, "D3": {"reach": ERROR}}), EXPLOITED)
+
+    def test_status_blocked_only_if_all_blocked(self):
+        self.assertEqual(demo._stage6_status({"D1": {"reach": BLOCKED}, "D3": {"reach": BLOCKED}}), BLOCKED)
+
+    def test_status_error_if_unevaluated(self):
+        self.assertEqual(demo._stage6_status({"D1": {"reach": ERROR}, "D3": {"reach": BLOCKED}}), ERROR)
+
+
 if __name__ == "__main__":
     unittest.main()
