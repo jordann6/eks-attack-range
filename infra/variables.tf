@@ -71,3 +71,20 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.0.0.0/16"
 }
+
+variable "decoy_user_name" {
+  description = "IAM user behind the planted D1 key (ADR-0005). Must look like a real service account: AccessDenied and GetCallerIdentity echo its ARN to whoever uses the key."
+  type        = string
+  default     = "svc-backup-sync"
+
+  validation {
+    condition     = !can(regex("(?i)decoy|honey|canary|trap", var.decoy_user_name))
+    error_message = "The name is shown to the attacker; it must not say decoy, honey, canary or trap."
+  }
+}
+
+variable "alert_email" {
+  description = "Optional address subscribed to the credential alert topic. Empty means no subscription; the S3 alert record is the evidence either way."
+  type        = string
+  default     = ""
+}

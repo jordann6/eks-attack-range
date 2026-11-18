@@ -1,0 +1,46 @@
+{
+  "0": {
+    "status": "info",
+    "detail": "healthz 200"
+  },
+  "1": {
+    "status": "exploited",
+    "detail": "HTTP 200"
+  },
+  "6": {
+    "status": "exploited",
+    "order": "decoy-first",
+    "decoys": {
+      "D1": {
+        "name": "AWS key in /root/.aws/credentials",
+        "reach": "exploited",
+        "held_before_alert": [],
+        "detection": "detected",
+        "alert_s": 2.2,
+        "attributed": true,
+        "attribution": "secret-mount",
+        "containment": "contained",
+        "quarantine_s": 3.4,
+        "pods": [
+          "summarizer-7bd967c86-56jz8"
+        ]
+      }
+    }
+  },
+  "2": {
+    "status": "exploited",
+    "detail": "after D1 quarantine label (3.4s): HTTP 200"
+  },
+  "3": {
+    "status": "error",
+    "detail": "after D1 quarantine label (3.4s): stage 2 won but the IMDSv2 credential steal failed"
+  },
+  "4": {
+    "status": "error",
+    "detail": "after D1 quarantine label (3.4s): RCE ran but the probe returned nothing"
+  },
+  "5": {
+    "status": "error",
+    "detail": "after D1 quarantine label (3.4s): RCE ran but the probe returned nothing"
+  }
+}

@@ -35,6 +35,23 @@ module "eks" {
   # sit unencrypted in etcd. The trophy key is one `kubectl get secret -o yaml`
   # away. The paved road envelope-encrypts the secrets resource with a CMK.
 
+  # NetworkPolicy enforcement for the deception layer's pod quarantine
+  # (ADR-0005). The VPC CNI ships a network policy agent that is off by default.
+  # Managing vpc-cni as an EKS add-on with enableNetworkPolicy, and creating it
+  # before the node group (before_compute), means nodes join with the agent
+  # already on, so enforcement does not wait for a node rollout. No policy
+  # selects any pod until the responder labels one, so the baseline's traffic
+  # is unchanged. coredns and kube-proxy stay as EKS bootstraps them.
+  cluster_addons = {
+    vpc-cni = {
+      most_recent    = true
+      before_compute = true
+      configuration_values = jsonencode({
+        enableNetworkPolicy = "true"
+      })
+    }
+  }
+
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 

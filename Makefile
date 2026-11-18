@@ -107,10 +107,108 @@ verify-hardened: ## Prove all five controls hold after `make harden`
 	if kubectl -n $(NS) get secret summarizer-key >/dev/null 2>&1; then echo "  FAIL: secret present"; fail=1; else echo "  PASS"; fi; \
 	test $$fail -eq 0 && echo "ALL CONTROLS HOLD" || { echo "HARDENING INCOMPLETE"; exit 1; }
 
+# --- deception layer (ADR-0005) --------------------------------------------
+# Three planted credentials caught from two telemetry sources, contained by an
+# in-cluster responder. The D1 key and the D3 Secret hold values that must never
+# be committed, so they are minted here, not in Terraform (platform-guardrails
+# also denies aws_iam_access_key). Run after `make deploy`.
+
+.PHONY: decoys
+decoys: ## Plant D1/D3/D4, push + deploy the responder, mint the D1 key out of state
+	$(eval ECR := $(shell $(TF) output -raw ecr_repository_url))
+	$(eval REGISTRY := $(word 1,$(subst /, ,$(ECR))))
+	$(eval BUCKET := $(shell $(TF) output -raw ir_events_bucket))
+	$(eval USERNAME := $(shell $(TF) output -raw decoy_user_name))
+	$(eval MAPPREFIX := $(shell $(TF) output -raw credential_map_prefix))
+	$(eval ROLEARN := $(shell $(TF) output -raw responder_role_arn))
+	$(eval KMSARN := $(shell $(TF) output -raw ir_kms_key_arn))
+	$(eval REGION := $(shell $(TF) output -raw region))
+	aws ecr get-login-password --region $(REGION) | docker login --username AWS --password-stdin $(REGISTRY)
+	docker build --platform linux/amd64 -t $(ECR):responder-ir deception/responder
+	docker push $(ECR):responder-ir
+	# D3: the decoy Secret. Believable values, random, never committed.
+	kubectl -n $(NS) create secret generic prod-db-backup-creds \
+		--from-literal=username=svc_dbbackup \
+		--from-literal=password="$$(openssl rand -hex 24)" \
+		--from-literal=host=db-backup.prod.internal \
+		--dry-run=client -o yaml | kubectl apply -f -
+	# D4 (ServiceAccount + unbound token) and the quarantine policy + responder.
+	kubectl apply -k deception/k8s
+	kubectl -n security-tools annotate serviceaccount incident-responder \
+		eks.amazonaws.com/role-arn=$(ROLEARN) --overwrite
+	kubectl -n security-tools set env deployment/incident-responder BUCKET=$(BUCKET) KMS_KEY_ARN=$(KMSARN)
+	kubectl -n security-tools set image deployment/incident-responder responder=$(ECR):responder-ir
+	kubectl -n security-tools rollout status deployment/incident-responder
+	# D1: mint ONE access key on the zero-policy user and plant it in the pod. The
+	# secret value never touches Terraform state or git. The SSM map lets the alert
+	# Lambda name the Secret for the responder to find the mounting pod.
+	@KEYJSON=$$(aws iam create-access-key --user-name $(USERNAME) --output json); \
+	KID=$$(echo "$$KEYJSON" | jq -r '.AccessKey.AccessKeyId'); \
+	SAK=$$(echo "$$KEYJSON" | jq -r '.AccessKey.SecretAccessKey'); \
+	printf '[default]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$$KID" "$$SAK" \
+		| kubectl -n $(NS) create secret generic backup-sync-aws --from-file=credentials=/dev/stdin \
+			--dry-run=client -o yaml | kubectl apply -f -; \
+	aws ssm put-parameter --name "$(MAPPREFIX)/$$KID" --type String --overwrite \
+		--value 'summarizer/backup-sync-aws' >/dev/null; \
+	kubectl -n $(NS) rollout restart deployment/summarizer; \
+	echo "planted D1 key $$KID on summarizer (secret value not stored)"
+	kubectl -n $(NS) rollout status deployment/summarizer
+	$(MAKE) verify-decoys
+
+.PHONY: decoys-rearm
+decoys-rearm: ## Clear today's alert/quarantine records and un-quarantine, for the second attacker order
+	$(eval BUCKET := $(shell $(TF) output -raw ir_events_bucket))
+	-aws s3 rm s3://$(BUCKET)/alerts/ --recursive
+	-aws s3 rm s3://$(BUCKET)/quarantine/ --recursive
+	-kubectl -n $(NS) label pods -l app=summarizer security.attack-range/quarantine- 2>/dev/null
+	@echo "records cleared and quarantine labels removed"
+
+.PHONY: verify-decoys
+verify-decoys: ## Prove the deception layer is armed (zero-policy user, rule state, filter, policy, enforcement)
+	$(eval USERNAME := $(shell $(TF) output -raw decoy_user_name))
+	$(eval RULE := $(shell $(TF) output -raw credential_rule_name))
+	$(eval REGION := $(shell $(TF) output -raw region))
+	@fail=0; \
+	echo "1/6 decoy user has zero policies"; \
+	inline=$$(aws iam list-user-policies --user-name $(USERNAME) --query 'length(PolicyNames)' --output text); \
+	attached=$$(aws iam list-attached-user-policies --user-name $(USERNAME) --query 'length(AttachedPolicies)' --output text); \
+	groups=$$(aws iam list-groups-for-user --user-name $(USERNAME) --query 'length(Groups)' --output text); \
+	if [ "$$inline" = 0 ] && [ "$$attached" = 0 ] && [ "$$groups" = 0 ]; then echo "  PASS"; else echo "  FAIL (inline=$$inline attached=$$attached groups=$$groups)"; fail=1; fi; \
+	echo "2/6 EventBridge rule in ALL-management-events state"; \
+	state=$$(aws events describe-rule --name $(RULE) --region $(REGION) --query State --output text); \
+	if [ "$$state" = ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS ]; then echo "  PASS"; else echo "  FAIL ($$state)"; fail=1; fi; \
+	echo "3/6 account has a trail logging management read+write (or D1 never fires)"; \
+	trails=$$(aws cloudtrail describe-trails --region $(REGION) --query 'length(trailList)' --output text); \
+	if [ "$$trails" -ge 1 ]; then echo "  PASS ($$trails trail/s; confirm read+write in the console if unsure)"; else echo "  FAIL: no trail"; fail=1; fi; \
+	echo "4/6 audit subscription filter present"; \
+	lg=$$($(TF) output -raw cluster_log_group); \
+	sf=$$(aws logs describe-subscription-filters --log-group-name "$$lg" --region $(REGION) --query 'length(subscriptionFilters)' --output text 2>/dev/null); \
+	if [ "$$sf" -ge 1 ]; then echo "  PASS"; else echo "  FAIL (none)"; fail=1; fi; \
+	echo "5/6 quarantine NetworkPolicy present and enforcement on"; \
+	if kubectl -n $(NS) get networkpolicy quarantine >/dev/null 2>&1 \
+		&& [ "$$(kubectl -n kube-system get ds aws-node -o jsonpath='{.status.numberReady}')" -gt 0 ] \
+		&& kubectl -n kube-system get ds aws-node -o jsonpath='{.spec.template.spec.containers[*].name}' | grep -qE "aws-eks-nodeagent|aws-network-policy-agent"; \
+		then echo "  PASS"; else echo "  FAIL (policy or agent missing)"; fail=1; fi; \
+	echo "6/6 responder running with least-privilege Role"; \
+	if [ "$$(kubectl -n security-tools get deploy incident-responder -o jsonpath='{.status.readyReplicas}')" = 1 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi; \
+	test $$fail -eq 0 && echo "DECEPTION LAYER ARMED" || { echo "DECEPTION LAYER INCOMPLETE"; exit 1; }
+
 # --- teardown ---------------------------------------------------------------
 
 .PHONY: destroy-plan
-destroy-plan: ## Remove the app first (frees the NLB), then write infra/destroy.tfplan and print the destroy command
+destroy-plan: ## Remove the app + decoys first (frees the NLB, deletes the minted key), then write infra/destroy.tfplan
+	# Delete the make-minted D1 key before destroy so it never lingers, and empty
+	# the SSM map it was recorded in. force_destroy on the user is the backstop.
+	-@USERNAME=$$($(TF) output -raw decoy_user_name 2>/dev/null); \
+	if [ -n "$$USERNAME" ]; then \
+		for k in $$(aws iam list-access-keys --user-name $$USERNAME --query 'AccessKeyMetadata[].AccessKeyId' --output text 2>/dev/null); do \
+			aws iam delete-access-key --user-name $$USERNAME --access-key-id $$k && echo "deleted D1 key $$k"; \
+			MP=$$($(TF) output -raw credential_map_prefix 2>/dev/null); \
+			aws ssm delete-parameter --name "$$MP/$$k" 2>/dev/null || true; \
+		done; \
+	fi
+	-kubectl delete -k deception/k8s --ignore-not-found --wait=false
+	-kubectl -n $(NS) delete secret backup-sync-aws prod-db-backup-creds --ignore-not-found
 	-kubectl delete -k app/k8s --ignore-not-found --wait=true
 	-kubectl -n $(NS) delete secret summarizer-key --ignore-not-found
 	$(TF) plan -destroy -input=false -out=destroy.tfplan \
@@ -126,7 +224,9 @@ verify-gone: ## Confirm nothing hourly survived: no cluster, NAT gateway, load b
 	echo "nat gws:    $$(aws ec2 describe-nat-gateways --region $$r --filter Name=tag:Project,Values=eks-attack-range Name=state,Values=available,pending --query 'NatGateways[].NatGatewayId' --output text)"; \
 	echo "load bal:   $$(aws elbv2 describe-load-balancers --region $$r --query 'LoadBalancers[?contains(LoadBalancerName, `k8s`)].LoadBalancerArn' --output text 2>/dev/null) $$(aws elb describe-load-balancers --region $$r --query 'LoadBalancerDescriptions[].LoadBalancerName' --output text)"; \
 	echo "ecr:        $$(aws ecr describe-repositories --region $$r --query 'repositories[?contains(repositoryName, `attack-range`)].repositoryName' --output text 2>/dev/null)"; \
-	echo "(all four empty = nothing left running)"
+	echo "decoy keys: $$(aws iam list-access-keys --user-name svc-backup-sync --query 'AccessKeyMetadata[].AccessKeyId' --output text 2>/dev/null)"; \
+	echo "ir bucket:  $$(aws s3api list-buckets --query 'Buckets[?contains(Name, `ir-events`)].Name' --output text 2>/dev/null)"; \
+	echo "(all empty = nothing left running; a left decoy key or ir bucket is a deception leftover)"
 
 # --- AKS (one bounded live session, ADR-0004) ------------------------------
 # Design level only: this port's own stage-rewrite code (attack/demo_aks.py,

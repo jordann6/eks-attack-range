@@ -1,0 +1,26 @@
+# D4: a ServiceAccount nothing legitimate ever runs as, with a long-lived token
+# Secret an attacker finds in any secrets list. It has no RoleBinding or
+# ClusterRoleBinding anywhere, so every request with its token is a 403, and the
+# EKS audit log records each one under its username. That username is the alarm.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-operator
+  namespace: summarizer
+  labels:
+    app.kubernetes.io/name: backup-operator
+    app.kubernetes.io/component: backup
+automountServiceAccountToken: false
+---
+# The token controller fills in data.token. Nothing is committed.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-operator-token
+  namespace: summarizer
+  labels:
+    app.kubernetes.io/name: backup-operator
+    app.kubernetes.io/component: backup
+  annotations:
+    kubernetes.io/service-account.name: backup-operator
+type: kubernetes.io/service-account-token

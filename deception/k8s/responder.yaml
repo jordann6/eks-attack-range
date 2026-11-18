@@ -1,0 +1,87 @@
+# In-cluster responder (deception/responder). Polls S3 for alert records and
+# labels the attributed pod for quarantine. Least privilege on both sides:
+# a Role in summarizer that can only get, list and patch pods, and an IRSA role
+# (infra/deception.tf) that can only read alerts/* and write quarantine/*.
+# `make decoys` sets the image and the role-arn annotation.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-tools
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-responder
+  namespace: security-tools
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: incident-responder
+  namespace: summarizer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: incident-responder
+  namespace: summarizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: incident-responder
+subjects:
+  - kind: ServiceAccount
+    name: incident-responder
+    namespace: security-tools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-responder
+  namespace: security-tools
+  labels:
+    app: incident-responder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-responder
+  template:
+    metadata:
+      labels:
+        app: incident-responder
+    spec:
+      serviceAccountName: incident-responder
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: responder
+          image: incident-responder:set-by-make
+          imagePullPolicy: Always
+          env:
+            - name: BUCKET
+              value: set-by-make
+            - name: POLL_S
+              value: "2"
+            - name: ALLOWED_NAMESPACES
+              value: summarizer
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
